@@ -1,0 +1,31 @@
+
+# MATLAB
+*.asv
+*.m~
+*.mat
+
+# Python
+.ipynb_checkpoints/
+__pycache__/
+*.pyc
+.jupyter/
+.venv/
+venv/
+
+
+# R
+.Rhistory
+
+# macOS
+.DS_Store
+
+# neuroimaging files 
+*.nii*
+*.feat/
+*.gfeat/
+*.img
+*.hdr
+
+# SLURM
+*.out
+slurm-*.*
