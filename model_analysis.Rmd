@@ -1,0 +1,652 @@
+---
+title: "model_analysis_main_submit"
+output: html_document
+date: "2025-10-18"
+---
+
+## Libraries
+```{r setup, include=FALSE}
+library(hBayesDM)
+library(rstan)
+library(dplyr)
+library(ggplot2)
+library(tidyverse)
+```
+
+## Set up directories
+```{r}
+getwd()
+data_dir <- 'data/modeling/fit_outputs/data_fit'
+recovery_dir <- 'data/modeling/fit_outputs/recovery_fit'
+model_comparison_dir <- 'data/modeling/model_comparison'
+model_fits_dir <- 'data/modeling/fit_outputs/model_fits'
+input_data_sim_dir <- 'data/modeling/sim_input_data'
+```
+
+## Setup: figure settings
+```{r}
+axes_labels_size <- 8   # axis titles (x/y labels)
+axes_tick_size   <- 7   # tick labels + legend text
+panel_labels_size <- 10 # panel labels like "A", "B", "C"
+```
+
+## Setup: Load in model fit data, extract parameters
+```{r}
+# ---- Load model outputs of interest for both groups ---- #
+out_Awin_persev_tc <- readRDS(file.path(model_fits_dir, "bandit2arm_delta_State_persev_Awin_TC.rds"))
+
+out_Awin_persev_ptsd <- readRDS(file.path(model_fits_dir, "bandit2arm_delta_State_persev_Awin_PTSD.rds"))
+```
+
+# Setup: Extract parameters from winning model output
+```{r}
+params_Awin_persev_tc <- rstan::extract(out_Awin_persev_tc);
+params_Awin_persev_ptsd <- rstan::extract(out_Awin_persev_ptsd);
+```
+
+## Setup: Load in model comparison
+```{r}
+model_comparison_ptsd <- readRDS(file.path(model_comparison_dir, "PTSD_model_comparison.rds"))
+model_comparison_tc <- readRDS(file.path(model_comparison_dir, "TC_model_comparison.rds"))
+```
+
+## Setup: Load in recovery fits
+```{r}
+res_tc <- readRDS(file.path(recovery_dir, "A_win_persev_TC_recovery.rds"))
+res_ptsd <- readRDS(file.path(recovery_dir, "A_win_persev_PTSD_recovery.rds"))
+```
+
+## Set plotting colors
+```{r}
+no_change_col = "#AA4499"
+rev_col = "#88CCEE"
+deval_col = "#DDCC77"
+
+tc_col = "#368475"
+ptsd_col = "#CC6677"
+nt_col <- "969696"
+
+incorrect_col = "#4D4D4D"
+correct_col = "#EFEBD6"
+
+deval_consump_col <- "#7B3294"  
+val_consump_col   <- "#228B22" 
+
+alc_col  = "#DAA520"
+neut_col = "#6C91BF"
+
+color_labels <- c(
+  "no_change_col", "rev_col", "deval_col",
+  "tc_col", "ptsd_col",
+  "incorrect_col", "correct_col",
+  "deval_consump_col", "val_consump_col",
+  "alc_col", "neut_col"
+)
+
+color_values <- c(
+  "#AA4499", "#88CCEE", "#DDCC77",
+  "#368475", "#CC6677",
+  "#4D4D4D", "#EFEBD6",
+  "#7B3294", "#228B22",
+  "#DAA520", "#6C91BF"
+)
+
+group_cols <- c("TC" = tc_col, "PTSD" = ptsd_col); group_cols_all <- c("TC" = tc_col, "PTSD" = ptsd_col, "NT" = nt_col); 
+group_fills <- c("TC" = tc_col, "PTSD" = ptsd_col); group_fills_all <- c("TC" = tc_col, "PTSD" = ptsd_col, "NT" = nt_col)
+```
+
+# Fig. 4a TC vs PTSD comparisons Population level Posteriors: A_win_persev
+```{r}
+# -------------- A_win -------------- #
+tc_mu <- data.frame(w = as.numeric(params_Awin_persev_tc$mu_A_win),   group = "TC")
+pt_mu <- data.frame(w = as.numeric(params_Awin_persev_ptsd$mu_A_win), group = "PTSD")
+df_mu  <- rbind(tc_mu, pt_mu)
+
+p_A_win <- ggplot(df_mu, aes(x = w, fill = group)) +
+  geom_density(alpha = 0.35, adjust = 1.2) +
+  geom_vline(data = aggregate(w ~ group, df_mu, median), aes(xintercept = w, color = group), linetype = 2) + 
+  labs(x = expression("Group level " * alpha * " (" * mu[alpha] * ")"), y = "Density") +
+  scale_fill_manual(values = group_fills) +
+  scale_color_manual(values = group_cols) +
+  theme_classic(base_size = axes_tick_size) +
+  theme(axis.title = element_text(size = axes_labels_size), axis.text = element_text(size = axes_tick_size),
+        legend.position = "none")
+#title = "Posterior distributions of mu_A_win: TC vs PTSD"
+
+# -------------- beta/tau -------------- #
+tc_mu <- data.frame(w = as.numeric(params_Awin_persev_tc$mu_tau),   group = "TC")
+pt_mu <- data.frame(w = as.numeric(params_Awin_persev_ptsd$mu_tau), group = "PTSD")
+df_mu  <- rbind(tc_mu, pt_mu)
+
+p_tau <-ggplot(df_mu, aes(x = w, fill = group)) +
+  geom_density(alpha = 0.35, adjust = 1.2) +
+  geom_vline(data = aggregate(w ~ group, df_mu, median), aes(xintercept = w, color = group), linetype = 2) +
+  labs(x = expression("Group level " * beta * " (" * mu[beta] * ")"), y = "Density") +
+  scale_fill_manual(values = group_fills) +
+  scale_color_manual(values = group_cols) +
+  theme_classic(base_size = axes_tick_size) +
+  theme(axis.title = element_text(size = axes_labels_size), axis.text = element_text(size = axes_tick_size),
+        legend.position = "none")
+# title = "Posterior distributions of mu_beta: TC vs PTSD"
+
+# -------------- persev (p) -------------- #
+tc_mu <- data.frame(w = as.numeric(params_Awin_persev_tc$mu_p),   group = "TC")
+pt_mu <- data.frame(w = as.numeric(params_Awin_persev_ptsd$mu_p), group = "PTSD")
+df_mu  <- rbind(tc_mu, pt_mu)
+
+p_p <- ggplot(df_mu, aes(x = w, fill = group)) +
+  geom_density(alpha = 0.35, adjust = 1.2) +
+  geom_vline(data = aggregate(w ~ group, df_mu, median), aes(xintercept = w, color = group), linetype = 2) +
+  labs(x = expression("Group level p (" * mu[p] * ")"), y = "Density") + 
+  scale_fill_manual(values = group_fills) +
+  scale_color_manual(values = group_cols) +
+  theme_classic(base_size = axes_tick_size) +
+  theme(axis.title = element_text(size = axes_labels_size), axis.text = element_text(size = axes_tick_size))
+# title = "Posterior distributions of mu_p: TC vs PTSD"
+
+print(p_A_win)
+print(p_tau)
+print(p_p)
+
+#ggsave("fig3_muA_win.pdf",p_A_win, width = 5, height = 5, units = "cm")
+#ggsave("fig3_muTau.pdf",p_tau, width = 5, height = 5, units = "cm")
+#ggsave("fig3_muP.pdf",p_p, width = 6.5, height = 5, units = "cm")
+```
+
+# Fig. 4b Setup: Posterior Predictive Checks for winning model
+```{r}
+# Load sim input data
+input_data_for_sim_ptsd <- readRDS(file.path(input_data_sim_dir, "input_data_for_sim_ptsd.rds"))
+input_data_for_sim_tc <- readRDS(file.path(input_data_sim_dir, "input_data_for_sim_tc.rds"))
+
+# ------------- Prep Real Data ------------
+# (1) Extract real choices 
+real_resp_ptsd <- input_data_for_sim_ptsd$choice
+real_out_ptsd <- input_data_for_sim_ptsd$outcome
+real_state_ptsd <- input_data_for_sim_ptsd$state
+real_corr_door_ptsd <- input_data_for_sim_ptsd$corr_door
+
+real_resp_tc <- input_data_for_sim_tc$choice
+real_out_tc <- input_data_for_sim_tc$outcome
+real_state_tc <- input_data_for_sim_tc$state
+real_corr_door_tc <- input_data_for_sim_tc$corr_door
+
+# (2)  Restructure Real data PTSD
+df_ptsd <- input_data_for_sim_ptsd
+n_trials_max <- 299
+subjects_ptsd <- sort(unique(df_ptsd$subjID))
+n_subjects_ptsd <- length(subjects_ptsd)
+
+choice_mat_ptsd <- matrix(
+  -1L,
+  nrow = n_subjects_ptsd,
+  ncol = n_trials_max,
+  dimnames = list(as.character(subjects_ptsd), paste0("t", seq_len(n_trials_max)))
+)
+
+corr_door_mat_ptsd <- matrix(
+  -1L,
+  nrow = n_subjects_ptsd,
+  ncol = n_trials_max,
+  dimnames = list(as.character(subjects_ptsd), paste0("t", seq_len(n_trials_max)))
+)
+
+for (i in seq_along(subjects_ptsd)) {
+  s <- subjects_ptsd[i]
+  ch <- df_ptsd$choice[df_ptsd$subjID == s]
+  cd <- df_ptsd$corr_door[df_ptsd$subjID == s]
+
+  n <- min(length(ch), n_trials_max)
+  choice_mat_ptsd[i, seq_len(n)] <- ch[seq_len(n)]
+  corr_door_mat_ptsd[i, seq_len(n)] <- cd[seq_len(n)]
+}
+choice_df_ptsd <- data.frame(choice_mat_ptsd, check.names = FALSE)
+corr_door_df_ptsd <- data.frame(corr_door_mat_ptsd, check.names = FALSE)
+
+# ------- (2) Restructure Real data TC
+df_tc <- input_data_for_sim_tc
+n_trials_max <- 299
+subjects_tc <- sort(unique(df_tc$subjID))
+n_subjects_tc <- length(subjects_tc)
+
+choice_mat_tc <- matrix(
+  -1L,
+  nrow = n_subjects_tc,
+  ncol = n_trials_max,
+  dimnames = list(as.character(subjects_tc), paste0("t", seq_len(n_trials_max)))
+)
+
+corr_door_mat_tc <- matrix(
+  -1L,
+  nrow = n_subjects_tc,
+  ncol = n_trials_max,
+  dimnames = list(as.character(subjects_tc), paste0("t", seq_len(n_trials_max)))
+)
+
+for (i in seq_along(subjects_tc)) {
+  s <- subjects_tc[i]
+  ch <- df_tc$choice[df_tc$subjID == s]
+  cd <- df_tc$corr_door[df_tc$subjID == s]
+
+  n <- min(length(ch), n_trials_max)
+  choice_mat_tc[i, seq_len(n)] <- ch[seq_len(n)]
+  corr_door_mat_tc[i, seq_len(n)] <- cd[seq_len(n)]
+}
+choice_df_tc <- data.frame(choice_mat_tc, check.names = FALSE)
+corr_door_df_tc <- data.frame(corr_door_mat_tc, check.names = FALSE)
+
+# (2) Derive Real optimal responses BOTH groups 
+real_opt_match_ptsd <- ifelse(
+  choice_mat_ptsd != -1L & corr_door_mat_ptsd != -1L,
+  as.integer(choice_mat_ptsd == corr_door_mat_ptsd),
+  NA_integer_
+)
+real_opt_match_ptsd <- data.frame(
+  real_opt_match_ptsd,
+  check.names = FALSE
+)
+
+real_opt_match_tc <- ifelse(
+  choice_mat_tc != -1L & corr_door_mat_tc != -1L,
+  as.integer(choice_mat_tc == corr_door_mat_tc),
+  NA_integer_
+)
+real_opt_match_tc <- data.frame(
+  real_opt_match_tc,
+  check.names = FALSE
+)
+
+# ------------- Derive optimal responses for simulated data ------------
+
+# ----- (1) Extract simulated choices (both groups)
+params_ptsd   <- params_Awin_persev_ptsd
+sim_resp_all_ptsd <- params_ptsd$y_pred 
+sim_resp_mean_ptsd <-  apply(sim_resp_all_ptsd, c(2, 3), mean)   # subjects x trials
+sim_resp_mean_ptsd <- data.frame(sim_resp_mean_ptsd, check.names = FALSE)
+
+params_tc   <- params_Awin_persev_tc
+sim_resp_all_tc <- params_tc$y_pred 
+sim_resp_mean_tc <-  apply(sim_resp_all_tc, c(2, 3), mean)   # subjects x trials
+sim_resp_mean_tc <- data.frame(sim_resp_mean_tc, check.names = FALSE)
+
+# ----- (2) Derive (averaged over draws) optimal responses PTSD
+D_ptsd <- dim(sim_resp_all_ptsd)[1]
+S_ptsd <- dim(sim_resp_all_ptsd)[2]
+Tmax_ptsd <- dim(sim_resp_all_ptsd)[3]
+
+corr_mat <- corr_door_mat_ptsd                 # S x Tmax matrix (1/2, -1 padding)
+stopifnot(is.matrix(corr_mat), all(dim(corr_mat) == c(S_ptsd, Tmax_ptsd)))
+
+opt_match_all_ptsd <- array(NA_integer_, dim = c(D_ptsd, S_ptsd, Tmax_ptsd))
+
+for (d in 1:D_ptsd) {
+  sim_slice <- sim_resp_all_ptsd[d, , ]        # S x Tmax
+
+  valid <- (sim_slice != -1L) & (corr_mat != -1L)
+  opt_match_all_ptsd[d, , ] <- ifelse(valid, as.integer(sim_slice == corr_mat), NA_integer_)
+}
+
+sim_learning_curve_ptsd <- apply(               # subjects x trials
+  opt_match_all_ptsd,
+  c(2, 3),          # average over draws (dimension 1)
+  mean,
+  na.rm = TRUE
+)
+
+# ----- (2) Derive (averaged over draws) optimal responses TC
+D_tc <- dim(sim_resp_all_tc)[1]
+S_tc <- dim(sim_resp_all_tc)[2]
+Tmax_tc <- dim(sim_resp_all_tc)[3]
+
+corr_mat <- corr_door_mat_tc                 # S x Tmax matrix (1/2, -1 padding)
+stopifnot(is.matrix(corr_mat), all(dim(corr_mat) == c(S_tc, Tmax_tc)))
+
+opt_match_all_tc <- array(NA_integer_, dim = c(D_tc, S_tc, Tmax_tc))
+
+for (d in 1:D_tc) {
+  sim_slice <- sim_resp_all_tc[d, , ]        # S x Tmax
+
+  valid <- (sim_slice != -1L) & (corr_mat != -1L)
+  opt_match_all_tc[d, , ] <- ifelse(valid, as.integer(sim_slice == corr_mat), NA_integer_)
+}
+
+sim_learning_curve_tc <- apply(               # subjects x trials
+  opt_match_all_tc,
+  c(2, 3),          # average over draws (dimension 1)
+  mean,
+  na.rm = TRUE
+)
+
+# ----- (3) Create pseudo-blocks averages and plot PTSD
+Tmax_ptsd <- ncol(real_opt_match_ptsd)
+block_size <- 30
+
+block_id <- ceiling(seq_len(Tmax_ptsd) / block_size)
+n_blocks <- max(block_id)
+
+# real
+real_block_subj_ptsd <- matrix(NA_real_, nrow = nrow(real_opt_match_ptsd), ncol = n_blocks)
+for (b in 1:n_blocks) {
+  cols <- which(block_id == b)
+  real_block_subj_ptsd[, b] <- rowMeans(
+    real_opt_match_ptsd[, cols, drop = FALSE],
+    na.rm = TRUE
+  )
+}
+
+real_block_group_ptsd <- colMeans(real_block_subj_ptsd, na.rm = TRUE)
+
+# sim
+sim_block_subj_ptsd <- matrix(NA_real_, nrow = nrow(sim_learning_curve_ptsd), ncol = n_blocks)
+for (b in 1:n_blocks) {
+  cols <- which(block_id == b)
+  sim_block_subj_ptsd[, b] <- rowMeans(
+    sim_learning_curve_ptsd[, cols, drop = FALSE],
+    na.rm = TRUE
+  )
+}
+
+sim_block_group_ptsd <- colMeans(sim_block_subj_ptsd, na.rm = TRUE)
+
+# ----- (3) Create pseudo-blocks averages and plot TC
+Tmax_tc <- ncol(real_opt_match_tc)
+block_size <- 30
+
+block_id <- ceiling(seq_len(Tmax_tc) / block_size)
+n_blocks <- max(block_id)
+
+# real
+real_block_subj_tc <- matrix(NA_real_, nrow = nrow(real_opt_match_tc), ncol = n_blocks)
+for (b in 1:n_blocks) {
+  cols <- which(block_id == b)
+  real_block_subj_tc[, b] <- rowMeans(
+    real_opt_match_tc[, cols, drop = FALSE],
+    na.rm = TRUE
+  )
+}
+real_block_group_tc <- colMeans(real_block_subj_tc, na.rm = TRUE)
+
+# sim
+sim_block_subj_tc <- matrix(NA_real_, nrow = nrow(sim_learning_curve_tc), ncol = n_blocks)
+for (b in 1:n_blocks) {
+  cols <- which(block_id == b)
+  sim_block_subj_tc[, b] <- rowMeans(
+    sim_learning_curve_tc[, cols, drop = FALSE],
+    na.rm = TRUE
+  )
+}
+sim_block_group_tc <- colMeans(sim_block_subj_tc, na.rm = TRUE)
+
+# Make sure both groups have same # of blocks; if not, truncate to the min
+n_blocks_real <- min(length(real_block_group_ptsd), length(real_block_group_tc))
+n_blocks_sim  <- min(length(sim_block_group_ptsd),  length(sim_block_group_tc))
+```
+
+## Fig. 4b Simulated TC vs PTSD
+```{r}
+tc_col_light <- "#AAAAAA"
+tc_col <- "white"; ptsd_col <- "#555555"
+
+# Prepare data for ggplot
+plot_data <- data.frame(
+  Block = rep(1:n_blocks_sim, 2),
+  P_correct = c(sim_block_group_tc[1:n_blocks_sim], 
+                sim_block_group_ptsd[1:n_blocks_sim]),
+  Group = rep(c("TC", "PTSD"), each = n_blocks_sim)
+)
+
+# Plot
+p_sim_learning <- ggplot(plot_data, aes(x = Block, y = P_correct, color = Group, fill = Group, shape = Group)) +
+  geom_line(size = .5) +
+  geom_point(size = 1) +
+  scale_color_manual(values = c(TC = tc_col_light, PTSD = ptsd_col)) +
+  scale_fill_manual(values = c(TC = "white", PTSD = ptsd_col)) +
+  scale_shape_manual(values = c(TC = 21, PTSD = 19)) +
+  scale_y_continuous(labels = scales::percent, limits = c(0.5, 1)) +
+  scale_x_continuous(breaks = seq(1, n_blocks_sim, by = 1)) +
+  theme_classic(base_size = axes_tick_size) +
+  theme(axis.title = element_text(size = axes_labels_size), axis.text = element_text(size = axes_tick_size)) +
+  labs(x = "Block", y = "Learning performance") + 
+  theme(legend.position = "none")
+
+print(p_sim_learning)
+#ggsave("fig3_sim_model.pdf",p_sim_learning, width = 3.5, height = 3, units = "cm")
+```
+
+
+## Fig. 4b REAL TC vs PTSD
+```{r}
+plot_data_real <- data.frame(
+  Block = rep(1:n_blocks_real, 2),
+  P_correct = c(real_block_group_tc[1:n_blocks_real],
+                real_block_group_ptsd[1:n_blocks_real]),
+  Group = rep(c("TC", "PTSD"), each = n_blocks_real)
+)
+
+p_real_learning <- ggplot(plot_data_real, aes(x = Block, y = P_correct, color = Group, fill = Group, shape = Group)) +
+  geom_line(size = .5) +
+  geom_point(size = 1) +
+  scale_color_manual(values = c(TC = tc_col_light, PTSD = ptsd_col)) +
+  scale_fill_manual(values = c(TC = "white", PTSD = ptsd_col)) +
+  scale_shape_manual(values = c(TC = 21, PTSD = 19)) +
+  scale_y_continuous(labels = scales::percent, limits = c(0.5, 1)) +
+  scale_x_continuous(breaks = seq(1, n_blocks_real, by = 1)) +
+  theme_classic(base_size = axes_tick_size) +
+  theme(axis.title = element_text(size = axes_labels_size), axis.text = element_text(size = axes_tick_size)) +
+  labs(x = "Block", y = "Learning performance") + 
+  theme(legend.position = "none")
+
+print(p_real_learning)
+#ggsave("fig3_real_model.pdf",p_real_learning, width = 3.5, height = 3, units = "cm")
+```
+
+## Fig. 4c Posterior HDI plots
+```{r}
+# ---- A_win ---- #
+mu_A_win_TC   <- params_Awin_persev_tc$mu_A_win
+mu_A_win_PTSD <- params_Awin_persev_ptsd$mu_A_win
+
+# Compute posterior differences
+diff_mu_A_win <- mu_A_win_TC - mu_A_win_PTSD
+
+# use hbayesdm
+hbayes_ci_A_win <- HDIofMCMC(diff_mu_A_win)
+plot_A_win_hdi <- plotHDI(diff_mu_A_win) 
+
+# ---- beta ---- #
+mu_beta_TC   <- params_Awin_persev_tc$mu_tau
+mu_beta_PTSD <- params_Awin_persev_ptsd$mu_tau
+
+# Compute posterior differences
+diff_mu_beta <- mu_beta_TC - mu_beta_PTSD
+
+# use hbayesdm
+hbayes_ci_beta <- HDIofMCMC(diff_mu_beta)
+print(hbayes_ci_beta)
+plot_beta_hdi <- plotHDI(diff_mu_beta) 
+
+# ---- p ---- #
+mu_p_TC   <- params_Awin_persev_tc$mu_p
+mu_p_PTSD <- params_Awin_persev_ptsd$mu_p
+
+# Compute posterior differences
+diff_mu_p <- mu_p_TC - mu_p_PTSD
+
+# use hbayesdm
+hbayes_ci_p <- HDIofMCMC(diff_mu_p)
+print(hbayes_ci_p)
+plot_p_hdi <- plotHDI(diff_mu_p) 
+
+plot_A_win_hdi
+plot_beta_hdi
+plot_p_hdi
+
+#ggsave("Supp4D_HDI_diff_mu_Awin.pdf", plot_A_win_hdi, width = 5, height = 5)
+#ggsave("Supp4D_HDI_diff_mu_beta.pdf", plot_beta_hdi, width = 5, height = 5)
+#ggsave("Supp4D_HDI_diff_mu_p.pdf", plot_p_hdi, width = 5, height = 5)
+```
+
+## Supp 4a: Visualize chains
+```{r}
+# extract plots
+chains_tc   <- traceplot(out_Awin_persev_tc)
+chains_ptsd <- traceplot(out_Awin_persev_ptsd)
+
+# show
+chains_tc
+chains_ptsd
+```
+
+# Supp 4b: Parameter recovery
+```{r}
+# I make and save plots to the rds file loaded above. You can change the plotting params in the code chunk
+# that runs param recovery, or, manually edit them as I am below. Param recovery takes a while, so I am 
+# opting for the second option. 
+
+# ---------  Modify TC plots ------------
+# A_win
+plot_data1 <- res_tc$plots$A_win$data
+stats1 <- cor.test(plot_data1$Awin_true, plot_data1$Awin_rec)
+r21 <- round(stats1$estimate^2, 3)
+p_val1 <- format(stats1$p.value, scientific = TRUE, digits = 2)
+
+p_recAwin_tc <- plot_data1 %>%
+  ggplot(aes(x = Awin_true, y = Awin_rec)) +
+  geom_point(size = .5) +
+  geom_smooth(method = "lm", se = FALSE, size = 0.5) +
+  annotate("text", x = Inf, y = -Inf, hjust = 1.5, vjust = -1.1,
+         label = paste0("R² = ", r21, "\n", "p = ", p_val1), 
+         size = 2.5) +
+  theme_classic(base_size = axes_tick_size) +
+  theme(axis.title = element_text(size = axes_labels_size), 
+        axis.text = element_text(size = axes_tick_size)) +
+  labs(x = expression(paste(alpha[win], " true")), y = expression(paste(alpha[win], " recovered")))
+
+# beta/tau
+plot_data2 <- res_tc$plots$tau$data
+stats2 <- cor.test(plot_data2$tau_true, plot_data2$tau_rec)
+r22 <- round(stats2$estimate^2, 3)
+p_val2 <- format(stats2$p.value, scientific = TRUE, digits = 2)
+
+p_recBeta_tc <- plot_data2 %>%
+  ggplot(aes(x = tau_true, y = tau_rec)) +
+  geom_point(size = .5) +
+  geom_smooth(method = "lm", se = FALSE, size = 0.5) +
+  annotate("text", x = Inf, y = -Inf, hjust = 1.5, vjust = -1.1,
+         label = paste0("R² = ", r22, "\n", "p = ", p_val2), 
+         size = 2.5) +
+  theme_classic(base_size = axes_tick_size) +
+  theme(axis.title = element_text(size = axes_labels_size), 
+        axis.text = element_text(size = axes_tick_size)) +
+  labs(x = expression(paste(beta, " true")), y = expression(paste(beta, " recovered")))
+
+# p
+plot_data3 <- res_tc$plots$p$data
+stats3 <- cor.test(plot_data3$p_true, plot_data3$p_rec)
+r23 <- round(stats3$estimate^2, 3)
+p_val3 <- format(stats3$p.value, scientific = TRUE, digits = 2)
+
+p_recP_tc <- plot_data3 %>% 
+  ggplot(aes(x = p_true, y = p_rec)) +
+  geom_point(size = .5) +
+  geom_smooth(method = "lm", se = FALSE, size = 0.5) +
+  annotate("text", x = Inf, y = -Inf, hjust = 1.5, vjust = -1.1,
+         label = paste0("R² = ", r23, "\n", "p = ", p_val3), 
+         size = 2.5) +
+  theme_classic(base_size = axes_tick_size) +
+  theme(axis.title = element_text(size = axes_labels_size), 
+        axis.text = element_text(size = axes_tick_size)) +
+  labs(x = expression(paste(italic(p), " true")), y = expression(paste(italic(p), " recovered")))
+  
+# save plots
+print(p_recAwin_tc)
+print(p_recBeta_tc)
+print(p_recP_tc)
+#ggsave("fig3_rec_Awin_tc.pdf",p_recAwin_tc, width = 5, height = 5, units = "cm")
+#ggsave("fig3_rec_beta_tc.pdf",p_recBeta_tc, width = 5, height = 5, units = "cm")
+#ggsave("fig3_rec_p_tc.pdf",p_recP_tc, width = 5, height = 5, units = "cm")
+
+# ---------- Modify PTSD plots -------------
+# A_win
+plot_data4 <- res_ptsd$plots$A_win$data
+stats4 <- cor.test(plot_data4$Awin_true, plot_data4$Awin_rec)
+r24 <- round(stats4$estimate^2, 3)
+p_val4 <- format(stats4$p.value, scientific = TRUE, digits = 2)
+
+p_recAwin_ptsd <- plot_data4 %>%
+  ggplot(aes(x = Awin_true, y = Awin_rec)) +
+  geom_point(size = .5) +
+  geom_smooth(method = "lm", se = FALSE, size = 0.5) +
+  annotate("text", x = Inf, y = -Inf, hjust = 1.5, vjust = -1.1,
+         label = paste0("R² = ", r24, "\n", "p = ", p_val4), 
+         size = 2.5) +
+  theme_classic(base_size = axes_tick_size) +
+  theme(axis.title = element_text(size = axes_labels_size), 
+        axis.text = element_text(size = axes_tick_size)) +
+  labs(x = expression(paste(alpha[win], " true")), y = expression(paste(alpha[win], " recovered")))
+
+# beta
+plot_data5 <- res_ptsd$plots$tau$data
+stats5 <- cor.test(plot_data5$tau_true, plot_data5$tau_rec)
+r25 <- round(stats5$estimate^2, 3)
+p_val5 <- format(stats5$p.value, scientific = TRUE, digits = 2)
+
+p_recBeta_ptsd <- plot_data5 %>%
+  ggplot(aes(x = tau_true, y = tau_rec)) +
+  geom_point(size = .5) +
+  geom_smooth(method = "lm", se = FALSE, size = 0.5) +
+  annotate("text", x = Inf, y = -Inf, hjust = 1.5, vjust = -1.1,
+         label = paste0("R² = ", r25, "\n", "p = ", p_val5), 
+         size = 2.5) +
+  theme_classic(base_size = axes_tick_size) +
+  theme(axis.title = element_text(size = axes_labels_size), 
+        axis.text = element_text(size = axes_tick_size)) +
+  labs(x = expression(paste(beta, " true")), y = expression(paste(beta, " recovered")))
+
+# p
+plot_data6 <- res_ptsd$plots$p$data
+stats6 <- cor.test(plot_data6$p_true, plot_data6$p_rec)
+r26 <- round(stats6$estimate^2, 3)
+p_val6 <- format(stats6$p.value, scientific = TRUE, digits = 2)
+
+p_recP_ptsd <- plot_data6 %>%
+  ggplot(aes(x = p_true, y = p_rec)) +
+  geom_point(size = .5) +
+  geom_smooth(method = "lm", se = FALSE, size = 0.5) +
+  annotate("text", x = Inf, y = -Inf, hjust = 1.5, vjust = -1.1,
+         label = paste0("R² = ", r26, "\n", "p = ", p_val6), 
+         size = 2.5) +
+  theme_classic(base_size = axes_tick_size) +
+  theme(axis.title = element_text(size = axes_labels_size), 
+        axis.text = element_text(size = axes_tick_size)) +
+  labs(x = expression(paste(italic(p), " true")), y = expression(paste(italic(p), " recovered")))
+  
+
+# show plots
+print(p_recAwin_ptsd)
+print(p_recBeta_ptsd)
+print(p_recP_ptsd)
+
+#ggsave("fig3_rec_Awin_ptsd.pdf",p_recAwin_ptsd, width = 5, height = 5, units = "cm")
+#ggsave("fig3_rec_beta_ptsd.pdf",p_recBeta_ptsd, width = 5, height = 5, units = "cm")
+#ggsave("fig3_rec_p_ptsd.pdf",p_recP_ptsd, width = 5, height = 5, units = "cm")
+```
+
+# Supp Table 2: Model comparison
+```{r}
+print(model_comparison_tc)
+print(model_comparison_ptsd)
+```
+
+# Nonfig stats: Examine rhats (evaluate reliability of parameter estimates)
+```{r}
+smry_tc <- rstan::summary(out_Awin_persev_tc)$summary
+rhat_tc <- smry_tc[, "Rhat"]
+bayesplot::mcmc_rhat(rhat_tc)
+
+smry_ptsd <- rstan::summary(out_Awin_persev_ptsd)$summary
+rhat_ptsd <- smry_ptsd[, "Rhat"]
+bayesplot::mcmc_rhat(rhat_ptsd)
+```
+
+

@@ -1,0 +1,1568 @@
+---
+title: "main_doors_task_results"
+output:
+  html_document: default
+  pdf_document: default
+date: "2024-05-24"
+authors: Krystian Loetscher, Elizabeth Goldfarb
+description: Analysis code for NEST doors. Includes all main behavioral, neuroimaging,
+  modeling parameter x behavior associations, and pcl associations.
+---
+
+## Setup: Environment
+```{r, message=FALSE, warning=FALSE}
+# Clear environment
+rm(list=ls())
+
+# Load necessary packages
+library(tidyverse)
+library(ggplot2)
+library(scales)
+library(nlme)
+library(psych)
+library(emmeans)
+library(lme4)
+library(zoo)
+library(sjstats)
+library(pwr)
+library(gridExtra)
+library(patchwork)
+library(Hmisc)
+library(reshape)
+
+# For modeling
+library(hBayesDM)
+library(rstan)
+library(dplyr)
+```
+
+# Setup: Set directories
+```{r}
+getwd()
+processed_behav_dir <- 'data/behavioral/'
+processed_self_report_dir <- 'data/self_report'
+processed_betas_dir <- 'data//betas'
+processed_model_fit_out_dir <- 'data/modeling/fit_outputs/subj_posterior_means'
+```
+
+# Setup: Load in processed 1) behavioral data 2) self report 3) neural betas 4) winning model fit results
+```{r}
+# Behavioral data
+sr_merge.recode_opt <- read.csv(file.path(processed_behav_dir, "NEST_behavioral_data_processed.csv"))
+consump_merge <- read.csv(file.path(processed_behav_dir, "NEST_behavioral_data_consump_processed.csv"))
+conting_merge <- read.csv(file.path(processed_behav_dir, "NEST_behavioral_data_conting_processed.csv"))
+
+# Self report data
+self_report <- read.csv(file.path(processed_self_report_dir, "NEST_self_report_data_with_scanners_processed.csv"))
+nest_scid_ss <- read.csv(file.path(processed_self_report_dir, "NEST_SCID_SS_data_filt.csv"))
+
+# Neural data (betas)
+betas <- read.csv(file.path(processed_betas_dir, "mean_betas_long_processed.csv"))
+
+# Model fit outputs
+df_subject_means_all <- read.csv(file.path(processed_model_fit_out_dir, "df_subject_means_all.csv"))
+
+# Set study
+study_include <- 'nest'
+```
+
+# Setup: Set plotting colors
+```{r}
+# ---- Plotting colors ---- #
+# Cues
+no_change_col <- "#AA4499"; rev_col <- "#88CCEE"; deval_col <- "#DDCC77"
+deval_consump_col <- "#7B3294"; val_consump_col <- "#228B22"
+
+# Groups
+tc_col <- "white"; ptsd_col <- "#555555"
+tc_col_light <- "#AAAAAA"
+
+# ---- Label sizes ---- #
+axes_labels_size <- 7   # axis titles (x/y labels)
+axes_tick_size   <- 6   # tick labels + legend text
+```
+
+# --------------------------------------- Task Validation ----------------------------------------------#
+
+## Fig 1D: Group performance validation (All phases)
+```{r}
+# ---- Set y limits the same for both groups ---- #
+groups_data <- sr_merge.recode_opt %>%
+  filter(Study == study_include) %>%
+  filter(Phase %in% c(1,2) | (Phase == 3 & Block == 2)) %>%
+  filter(Group %in% c("TC", "PTSD")) %>%
+  group_by(Phase, Subject, Group, Block, CueInfo) %>%
+  summarise(plot_response = mean(Opt_resp, na.rm = TRUE), .groups = "drop") %>%
+  group_by(Phase, Block, CueInfo, Group) %>%
+  summarise(mean_response = mean(plot_response, na.rm = TRUE), .groups = "drop")
+
+ylims <- c(min(groups_data$mean_response, na.rm = TRUE),
+           max(groups_data$mean_response, na.rm = TRUE))
+
+# ---- TC Group Validation ---- #
+p_tcval <- sr_merge.recode_opt %>%
+  filter(Study == study_include) %>%
+  filter(Phase %in% c(1,2)| (Phase == 3 & Block == 2)) %>%
+  filter(Group == "TC") %>%
+  group_by(Phase, Subject, Group, Block, CueInfo) %>%
+  summarise(plot_response = mean(Opt_resp, na.rm = TRUE), .groups = "drop") %>%
+  ggplot(aes(x = Block, y = plot_response, color = CueInfo, fill = CueInfo)) + 
+  stat_summary(fun = mean, geom = "point", alpha = 1, size = 1) +
+  stat_summary(data = ~ filter(., Phase %in% c(1, 2)), 
+             fun.data = mean_se, geom = "ribbon", alpha = .4, color = NA, aes(group = CueInfo)) +
+  stat_summary(data = ~ filter(., Phase == 3), 
+             fun.data = mean_se, geom = "errorbar", width = 0, aes(group = CueInfo)) +
+  stat_summary(fun = mean, geom = "line", aes(group = CueInfo), alpha = 1, size = .5) + 
+  geom_hline(yintercept = 0.5, linetype = "dashed", size = 0.8, alpha = 0.7) +
+  scale_y_continuous(labels = scales::percent) +
+  coord_cartesian(ylim = ylims) +
+  scale_x_continuous(breaks = function(lims) seq(ceiling(lims[1]), floor(lims[2]), by = 1)) + 
+  scale_color_manual(values = c(no_change = no_change_col, rev= rev_col, deval = deval_col),
+                     labels = c(no_change = "No change",rev = "Reversed",deval = "Devalued")) +
+  scale_fill_manual(values = c(no_change = no_change_col, rev = rev_col, deval = deval_col),
+                    labels = c(no_change = "No change", rev = "Reversed", deval = "Devalued")) +
+  facet_grid(. ~ Phase, scales = "free_x") +
+  theme_classic(base_size = axes_tick_size) +
+  theme(axis.title = element_text(size = axes_labels_size), axis.text = element_text(size = axes_tick_size), legend.position = "none") +
+  theme(legend.position = "none") +
+  labs(x = "Block",y = "Optimal response", title = "TC")
+
+# ---- PTSD Group Validation ---- #
+p_ptsdval <- sr_merge.recode_opt %>%
+  filter(Study == study_include) %>%
+  filter(Phase %in% c(1,2)| (Phase == 3 & Block == 2)) %>%
+  filter(Group == "PTSD") %>%
+  group_by(Phase, Subject, Group, Block, CueInfo) %>%
+  summarise(plot_response = mean(Opt_resp, na.rm = TRUE), .groups = "drop") %>%
+  ggplot(aes(x = Block, y = plot_response, color = CueInfo, fill = CueInfo)) + 
+  stat_summary(fun = mean, geom = "point", alpha = 1, size = 1) +
+  stat_summary(data = ~ filter(., Phase %in% c(1, 2)), 
+             fun.data = mean_se, geom = "ribbon", alpha = .4, color = NA, aes(group = CueInfo)) +
+  stat_summary(data = ~ filter(., Phase == 3), 
+             fun.data = mean_se, geom = "errorbar", width = 0, aes(group = CueInfo)) +
+  stat_summary(fun = mean, geom = "line", aes(group = CueInfo), alpha = 1, size = .5) + 
+  geom_hline(yintercept = 0.5, linetype = "dashed", size = 0.8, alpha = 0.7) +
+  scale_y_continuous(labels = scales::percent) +
+  coord_cartesian(ylim = ylims) +
+  scale_x_continuous(breaks = function(lims) seq(ceiling(lims[1]), floor(lims[2]), by = 1)) +
+  scale_color_manual(values = c(no_change = no_change_col, rev= rev_col, deval = deval_col),
+                     labels = c(no_change = "No change",rev = "Reversed",deval = "Devalued")) +
+  scale_fill_manual(values = c(no_change = no_change_col, rev = rev_col, deval = deval_col),
+                    labels = c(no_change = "No change", rev = "Reversed", deval = "Devalued")) +
+  facet_grid(. ~ Phase, scales = "free_x") +
+  theme_classic(base_size = axes_tick_size) +
+  theme(axis.title = element_text(size = axes_labels_size), axis.text = element_text(size = axes_tick_size)) +
+  labs(x = "Block",y = "Optimal response", title = "PTSD")
+
+print(p_tcval)   #ggsave("fig1_tc_validation.pdf",p_tcval, width = 8, height = 5, units = "cm")
+print(p_ptsdval) #ggsave("fig1_ptsd_validation.pdf",p_ptsdval, width = 10.25, height = 5, units = "cm")
+
+# ---- Stats ---- #
+groups_df <- sr_merge.recode_opt %>%
+  filter(Study == study_include) %>%
+  filter(Phase %in% c(1, 2)) %>%
+  filter(Block > 5) %>%
+  group_by(Group, Subject, Phase, CueInfo) %>%
+  summarise(mean_opt = mean(Opt_resp, na.rm = TRUE), .groups = "drop")
+
+summary_stats <- groups_df %>%
+  group_by(Group, Phase, CueInfo) %>%
+  summarise(n = n(), sd_opt = sd(mean_opt), mean_opt = mean(mean_opt), .groups  = "drop")
+
+# t-tests
+ttest_results <- groups_df %>%
+  group_by(Group, Phase, CueInfo) %>%
+  summarise({
+    tt <- t.test(mean_opt, mu = 0.5)
+    data.frame(t_stat = tt$statistic, df_t = tt$parameter, p_val = tt$p.value)}, .groups = "drop")
+
+chance_tests <- left_join(summary_stats, ttest_results, by = c("Group", "Phase", "CueInfo")) %>%
+  mutate(p_fdr = p.adjust(p_val, method = "fdr"))
+
+print(chance_tests)
+```
+
+## Supp 1A: Consumption ##
+```{r}
+# Set dodge
+pd_consump <- position_jitterdodge(dodge.width = 0.9, jitter.width = 0.3)
+
+# Plot consumption
+p_consump <- consump_merge %>%
+  dplyr::filter(Study == study_include) %>%
+  mutate(Subject = as.character(Subject)) %>%
+  pivot_longer(c(NumKeep, NumDeval), names_to = 'Outcome', values_to = 'Num_chosen') %>%
+  filter(Phase %in% c('baseline','midpoint_1', 'midpoint_2','midpoint_3', 'deval')) %>%
+  mutate(Phase = factor(Phase, levels = c('baseline','midpoint_1','midpoint_2', 'midpoint_3', 'deval')),
+         Outcome = factor(Outcome, labels = c("Devalued", "Valued"))) %>%
+  mutate(Chosen_Proportion = ifelse(Outcome == "Devalued", Num_chosen/6, Num_chosen/12)) %>%
+  ggplot(aes(x = Phase, y = Chosen_Proportion, fill = Outcome)) +
+  stat_summary(fun = mean, geom = "bar", position = position_dodge(0.9), width = 0.8, alpha = 0.8) +
+  geom_point(aes(fill = Outcome, color = Outcome), position = pd_consump, shape = 21, size = .5, stroke = 0.5) +
+  stat_summary(fun.data = mean_se, geom = "errorbar", position = position_dodge(0.9), width = 0.1, size = 0.5, color = "grey30") +
+  scale_fill_manual(values = c(Devalued = scales::alpha(deval_col, 0.3), Valued = scales::alpha(val_consump_col, 0.3))) +
+  scale_color_manual(values = c(Devalued = deval_col, Valued = val_consump_col), guide = "none") +
+  facet_grid(.~factor(Group, levels = c("TC", "PTSD"))) +
+  theme_classic(base_size = axes_tick_size) +
+  theme(axis.title = element_text(size = axes_labels_size), axis.text = element_text(size = axes_tick_size)) +
+  scale_x_discrete(labels = c("baseline" = "B","midpoint_1" = "C1","midpoint_2" = "C2",
+                   "midpoint_3" = "C3", "deval" = "D1")) +
+  labs(x = "Consumption checkpoint ", y = "Chosen proportion")
+  
+print(p_consump) #ggsave("Supp1B_consump.pdf", p_consump, width = 10, height = 5, units = "cm")
+getwd()
+
+# ---- Stats ---- #
+consump_df <- consump_merge %>%
+  dplyr::filter(Study == study_include) %>%
+  mutate(Subject = as.character(Subject)) %>%
+  pivot_longer(c(NumKeep, NumDeval), names_to = 'Outcome', values_to = 'Num_chosen') %>%
+  mutate(Outcome = factor(Outcome, labels = c("Devalued", "Valued")),
+         Chosen_Proportion = ifelse(Outcome == "Devalued", Num_chosen/6, Num_chosen/12))
+
+# Deval checkpoint only: Are devalued fruits chosen less than valued fruits?
+consump_deval <- consump_df %>%
+  filter(Phase == "deval")
+
+deval_consump_model_lmer <- lmerTest::lmer(Chosen_Proportion ~ Group * Outcome + (1 | Subject), data = consump_deval)
+deval_consump_model_lme <- lme(Chosen_Proportion ~ Group * Outcome, random = ~1|Subject,data = consump_deval)
+anova(deval_consump_model_lme)
+emmeans(deval_consump_model_lmer, pairwise ~ Outcome | Group, adjust = "fdr")
+
+# Or, do a paired t-test
+tc_deval <- consump_deval %>%
+  filter(Group == "TC") %>%
+  pivot_wider(id_cols = Subject, names_from = Outcome, values_from = Chosen_Proportion)
+
+t.test(tc_deval$Valued, tc_deval$Devalued, paired = TRUE)
+
+# Are deval and val equivalently valued *before* devaluation? (control)
+consump_baseline <- consump_df %>%
+  filter(Phase %in% c("baseline", "midpoint_1", "midpoint_2", "midpoint_3"))
+
+baseline_consump_model <- lmerTest::lmer(
+  Chosen_Proportion ~ Group * Outcome * Phase + (1 | Subject),
+  data = consump_baseline
+)
+anova(baseline_consump_model)
+```
+
+# Supp 1B Contingency
+```{r}
+# Set dodge
+pd_conting <- position_jitterdodge(dodge.width = 0.9, jitter.width = 0.1)
+
+# Paper figure: Plot Contingency awareness: Exact
+p_conting_exact <- conting_merge %>%
+  filter(Study == study_include) %>%
+  group_by(Group, Subject, CueCode) %>%
+  summarise(Acc = mean(Acc, na.rm = TRUE), .groups = "drop") %>%
+  ggplot(aes(x = CueCode, y = Acc, fill = CueCode)) +
+  stat_summary(fun = mean, geom = "bar", position = position_dodge(0.9), width = 0.8, alpha = 0.8) +
+  geom_point(aes(fill = CueCode, color = CueCode), position = pd_conting, shape = 21, size = .5, stroke = 0.5) +
+  stat_summary(fun.data = mean_se, geom = "errorbar", position = position_dodge(0.9), width = 0.1, size = 0.5, color = "grey30") +
+  facet_grid(.~factor(Group, levels = c("TC", "PTSD"))) +
+  geom_hline(yintercept = .1667, linetype = "dashed") +
+  scale_x_discrete(labels = c(deval = "Devalued", reverse = "Reversed", nochange = "No Change")) + 
+  labs(x = "Stimulus Type", y = "Accuracy", title = "Contingency Awareness") + 
+  scale_fill_manual(values = c(deval = scales::alpha(deval_col, 0.3), 
+                                nochange = scales::alpha(no_change_col, 0.3), 
+                                reverse = scales::alpha(rev_col, 0.3))) +
+  scale_color_manual(values = c(deval = deval_col, nochange = no_change_col, reverse = rev_col), guide = "none") +
+  scale_y_continuous(labels = scales::percent) +
+  theme_classic(base_size = axes_tick_size) +
+  theme(axis.title = element_text(size = axes_labels_size), axis.text = element_text(size = axes_tick_size)) +
+  guides(fill = "none")
+print(p_conting_exact) #ggsave("Supp1B_conting.pdf",p_conting_exact, width = 10, height = 5, units = "cm")
+
+# ---- stats ---- #
+model_conting <- lmerTest::lmer(Acc ~ CueCode * Group + (1 | Subject),
+  data = conting_merge %>%
+    filter(Study == study_include) %>%
+    group_by(Group, Subject, CueCode) %>%
+    summarise(Acc = mean(Acc, na.rm = TRUE), .groups = "drop")
+)
+anova(model_conting)
+
+df_conting <- conting_merge %>%
+  filter(Study == study_include) %>%
+  group_by(Group, Subject, CueCode) %>%
+  summarise(Acc = mean(Acc, na.rm = TRUE), .groups = "drop")
+
+chance <- 1/6
+
+results <- df_conting %>%
+  group_by(Group, CueCode) %>%
+  summarise(
+    n = n(),
+    mean_acc = mean(Acc, na.rm = TRUE),
+    sd_acc = sd(Acc, na.rm = TRUE),
+    t = t.test(Acc, mu = chance)$statistic,
+    df = t.test(Acc, mu = chance)$parameter,
+    p = t.test(Acc, mu = chance)$p.value,
+    .groups = "drop"
+  )
+results
+```
+
+## Nonfig: Scanners
+```{r}
+scanners_path <- "/Users/kbl26/Projects/NEST_doors_clean/data/processed/self_report/NEST_self_report_data_with_scanners.csv"
+scanners <- read.csv(scanners_path)
+
+scanner_table <- table(scanners$Group, scanners$Scanner)
+chisq.test(scanner_table)
+```
+
+## Nonfig: Skipped trials comparison
+```{r}
+skipped_trials_dat <- sr_merge.recode_opt %>%
+  filter(Phase %in% c(1,2)) %>%
+  group_by(Group,Subject,Phase) %>%
+  summarise(mean_skipped_trials = mean(no_response), na.rm = TRUE)
+
+skipped_trials_dat$Phase <- as.factor(skipped_trials_dat$Phase)
+
+skip_trials_model <- lmerTest::lmer(mean_skipped_trials ~ Group * Phase + (1 | Subject), 
+                                    data = skipped_trials_dat)
+anova(skip_trials_model)
+#emmeans(skip_trials_model, pairwise ~ Phase)
+```
+
+# --------------------------------------- Behavioral Analyses ----------------------------------------------#
+
+## Nonfig: Compute subject-level behavioral summaries for key vars of interest, for each phase
+```{r}
+behav_vars_summary <- bind_rows(
+  
+  # ---- Learning (all stim, Phase 1) ---- #
+  sr_merge.recode_opt %>%
+    filter(Study == study_include, Phase == 1) %>%
+    group_by(Subject, Group) %>%
+    summarise(
+      # Mean optimal response
+      opt_resp_learn = mean(Opt_resp, na.rm = TRUE),
+      # Original response
+      orig_response_mean_learn = mean(orig_response, na.rm = TRUE),
+      # No response
+      no_response_mean_learn = mean(no_response, na.rm = TRUE),
+      # Updated response
+      update_response_mean_learn = mean(update_response, na.rm = TRUE),
+      # Mean proportion of win-stay (repeating rewarded action for a given stimulus)
+      win_stay_learn = {
+        d <- data.frame(Cue = Cue, CuePres = CuePres, SeqInit = SeqInit, Acc_recode = Acc_recode) %>%
+          filter(SeqInit %in% c("left", "right")) %>% arrange(Cue, CuePres)
+        cue_ws <- d %>% group_by(Cue) %>%
+          summarise(ws = {
+            wins  <- Acc_recode == 1
+            stays <- SeqInit[-1] == SeqInit[-length(SeqInit)]
+            mean(stays[wins[-length(wins)]], na.rm = TRUE)
+          }, .groups = "drop")
+        mean(cue_ws$ws, na.rm = TRUE)
+      },
+      # Trial-level switching
+      switch_rate_learn = {
+        seq <- SeqInit[SeqInit %in% c("left", "right")]
+        if (length(seq) > 1) mean(seq[-1] != seq[-length(seq)], na.rm = TRUE) else NA_real_
+      },
+      .groups = "drop"
+    ),
+  
+  # ---- Reversal (reversed stim only, Phase 2) ---- #
+  sr_merge.recode_opt %>%
+    filter(Study == study_include, Phase == 2, CueInfo == "rev",
+           !(Subject %in% c(7052, 7046))) %>%
+    group_by(Subject, Group) %>%
+    summarise(
+      # Mean optimal response
+      opt_resp_rev = mean(Opt_resp, na.rm = TRUE),
+      # Original response
+      orig_response_mean_rev = mean(orig_response, na.rm = TRUE),
+      # No response
+      no_response_mean_rev = mean(no_response, na.rm = TRUE),
+      # Updated response
+      update_response_mean_rev = mean(update_response, na.rm = TRUE),
+      # Mean proportion of win-stay for ONLY reversed stimuli
+      win_stay_rev = {
+        d <- data.frame(Cue = Cue, CuePres = CuePres, SeqInit = SeqInit, Acc_recode = Acc_recode) %>%
+          filter(SeqInit %in% c("left", "right")) %>% arrange(Cue, CuePres)
+        cue_ws <- d %>% group_by(Cue) %>%
+          summarise(ws = {
+            wins  <- Acc_recode == 1
+            stays <- SeqInit[-1] == SeqInit[-length(SeqInit)]
+            mean(stays[wins[-length(wins)]], na.rm = TRUE)
+          }, .groups = "drop")
+        mean(cue_ws$ws, na.rm = TRUE)
+      },
+      # Trial-level switching
+      switch_rate_rev = {
+        seq <- SeqInit[SeqInit %in% c("left", "right")]
+        if (length(seq) > 1) mean(seq[-1] != seq[-length(seq)], na.rm = TRUE) else NA_real_
+      },
+      .groups = "drop"
+    ),
+  
+  # ---- Devaluation (devalued stim only, Phase 3) ---- #
+  sr_merge.recode_opt %>%
+    filter(Study == study_include, Phase == 3, Block == 2, CueInfo == "deval",
+           !(Subject %in% c(7052, 7046))) %>%
+    group_by(Subject, Group) %>%
+    summarise(
+      # Withholding = no response made
+      withhold = mean(no_response,     na.rm = TRUE),
+      # Update = actively choosing other door (to avoid devalued stimuli)
+      update   = mean(update_response, na.rm = TRUE),
+      # Trial-level switching
+      switch_rate_deval = {
+        seq <- SeqInit[SeqInit %in% c("left", "right")]
+        if (length(seq) > 1) mean(seq[-1] != seq[-length(seq)], na.rm = TRUE) else NA_real_
+      },
+      .groups  = "drop"
+    )
+  
+) %>%
+  group_by(Subject, Group) %>%
+  summarise(across(everything(), ~first(na.omit(.))), .groups = "drop")
+```
+
+## Nonfig: Join all datasets
+```{r}
+# ---- Join Behavioral, Self report, Model parameter, and Neural data ---- #
+behav_vars_summary_join <- behav_vars_summary %>%
+  left_join(self_report %>% select(Subject, PCL_score, pcl_clustB, pcl_clustC, pcl_clustD, pcl_clustE), by = "Subject") %>%
+  left_join(df_subject_means_all %>%
+                select(Subject, A_win, tau, p), by = "Subject") %>%
+  left_join(betas %>%
+              filter(pe == 1, roi == "putam", run %in% c("learn_1", "learn_2")) %>%
+              select(Subject, run, mean_beta) %>%
+              pivot_wider(names_from = run, values_from = mean_beta,
+                          names_prefix = "beta_"), by = "Subject")
+```
+
+## Fig 2A: Learning; PTSD vs TC over CuePres & Slopes ##
+```{r}
+# Learning traces of PTSD and TC
+p_learn_diff <- sr_merge.recode_opt %>%
+  dplyr::filter(Phase==1 & Study == study_include) %>%
+  group_by(Phase, Subject, Group, CuePres) %>%
+  summarise(Opt_resp = mean(Opt_resp, na.rm = T), .groups = "drop") %>%
+  ggplot(aes(x = CuePres, y = Opt_resp, color = Group)) + 
+  stat_summary(aes(shape = Group), fun = mean, geom = "point", alpha = 1, size = 1) + 
+  stat_summary(fun.data = mean_se, geom = "ribbon", alpha = 0.2, color = NA, aes(group = Group, fill = Group)) +
+  stat_summary(fun = mean, geom = "line", aes(group = Group), alpha = 1, size = 0.5) +
+  geom_hline(yintercept = 0.5, linetype = "dashed") +
+  scale_y_continuous(labels = scales::percent) +
+  scale_x_continuous(breaks = pretty_breaks()) +
+  scale_color_manual(values = c(TC = tc_col_light, PTSD = ptsd_col)) +
+  scale_fill_manual(values = c(TC = tc_col_light, PTSD = ptsd_col)) +
+  scale_shape_manual(values = c(TC = 1, PTSD = 16)) +
+  theme_classic(base_size = axes_tick_size) +
+  theme(axis.title = element_text(size = axes_labels_size), axis.text = element_text(size = axes_tick_size)) + 
+  labs(x = "Stimulus presentation", y = "Optimal response")
+
+print(p_learn_diff) #ggsave("fig3_learn_diff_skinnier.pdf", p_learn_diff, width = 7.5, height = 5, units = "cm")
+
+# Slopes
+# Compute per-subject slopes then summarise for plotting
+slope_dat <- sr_merge.recode_opt %>%
+  dplyr::filter(Phase == 1 & Study == study_include) %>%
+  group_by(Subject, Group, CuePres) %>%
+  summarise(Opt_resp = mean(Opt_resp, na.rm = TRUE), .groups = "drop") %>%
+  group_by(Subject, Group) %>%
+  summarise(slope = coef(lm(Opt_resp ~ CuePres))[2], .groups = "drop") %>%
+  mutate(Group = factor(Group, levels = c("TC", "PTSD")))
+
+slope_summary <- slope_dat %>%
+  group_by(Group) %>%
+  summarise(mean = mean(slope), se = sd(slope) / sqrt(n()), .groups = "drop")
+
+p_learn_diff_blank <- ggplot(slope_summary, aes(x = Group, y = mean, color = Group)) +
+  geom_pointrange(aes(ymin = mean - se, ymax = mean + se)) +
+  geom_hline(yintercept = 0, linetype = "dashed", size = 0.8, alpha = 0.7) +
+  scale_color_manual(values = c(TC = tc_col_light, PTSD = ptsd_col)) +
+  guides(color = "none") +
+  ylim(0.003, NA) +
+  theme_classic(base_size = axes_tick_size) +
+  theme(axis.title = element_text(size = axes_labels_size),
+        axis.text = element_text(size = axes_tick_size)) +
+  labs(x = "Group", y = "Slope (Optimal response ~ Stimulus presentation)")
+print(p_learn_diff_blank)
+
+#ggsave("fig2A_slopes_inset.pdf",
+#       p_learn_diff_blank, width = 6, height = 6, units = "cm")
+
+# ---- stats ---- #
+input_model_data_cuePres <- sr_merge.recode_opt %>%
+  filter(Study == study_include & Phase == 1) %>%
+  group_by(Group,Subject,CuePres) %>%
+  summarise(orig_response = mean(orig_response, na.rm=T))
+
+learn_cuePres_model_lmer <- lmerTest::lmer(orig_response ~ Group * CuePres + (1 | Subject), data = input_model_data_cuePres)
+learn_cuePres_model_lme <- lme(orig_response ~ Group * CuePres, random = ~1|Subject, data = input_model_data_cuePres)
+
+anova(learn_cuePres_model_lmer)
+emtrends(learn_cuePres_model_lmer, pairwise ~ Group, var = "CuePres")
+
+#age?
+input_model_data_cuePres_age <- sr_merge.recode_opt %>%
+  filter(Study == study_include & Phase == 1) %>%
+  group_by(Group,Subject,CuePres,demo_age) %>%
+  summarise(orig_response = mean(orig_response, na.rm=T))
+learn_cuePres_model_age_lmer <- lmerTest::lmer(orig_response ~ Group * CuePres + demo_age + (1 | Subject), data = input_model_data_cuePres_age)
+anova(learn_cuePres_model_age_lmer)
+```
+
+# Fig. 2A: End of learning
+```{r}
+# Set dodge
+pd_last <- position_jitterdodge(dodge.width = 0.9, jitter.width = 0.12)
+
+# ---- Filter df ---- #
+df_lastlearn <- sr_merge.recode_opt %>%
+  dplyr::filter(Study == study_include, Phase == 1, Block > 5) %>%
+  #dplyr::filter(CueInfo %in% c("rev")) %>%
+  group_by(Subject, Group) %>%
+  summarise(
+    lastblock_opt = mean(orig_response, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# ---- Plot ---- #
+p_end_learn <- ggplot(df_lastlearn, aes(x = Group, y = lastblock_opt, fill = Group)) +
+  stat_summary(fun = mean, geom = "bar", width = 0.7, alpha = 0.8,
+               color = ptsd_col, size = 0.5) +
+  geom_point(aes(fill = Group, color = Group), position = pd_last, shape = 21, size = 1.5, stroke = 0.5) +
+  stat_summary(fun.data = mean_se, geom = "errorbar", width = 0) +
+  geom_hline(yintercept = 0.5, linetype = "dashed", size = 0.8, alpha = 0.7) +
+  scale_y_continuous(labels = scales::percent) +
+  scale_x_discrete(limits = c("TC", "PTSD")) +
+  scale_fill_manual(values = c(TC = "white", PTSD = scales::alpha(ptsd_col, 0.8))) +
+  scale_color_manual(values = c(TC = ptsd_col, PTSD = ptsd_col)) +
+  theme_classic(base_size = axes_tick_size) +
+  theme(axis.title = element_text(size = axes_labels_size), axis.text = element_text(size = axes_tick_size), 
+        legend.position = "none") +
+  labs(x = "Group", y = "Optimal response in Learning")
+
+print(p_end_learn) #ggsave("fig2A_End_Learning.pdf", p_end_learn , width = 4, height = 5, units = "cm")
+
+# ---- stats ---- #
+t.test(lastblock_opt ~ Group, data = df_lastlearn, var.equal = TRUE)
+```
+
+# Fig. 2B PCL x behavior plot
+```{r}
+plot_df <- behav_vars_summary_join %>%
+  filter(Group == "PTSD") %>%
+  select(Subject, PCL_score, opt_resp_learn) %>%
+  filter(!is.na(PCL_score), !is.na(opt_resp_learn))
+
+ct <- cor.test(plot_df$PCL_score, plot_df$opt_resp_learn)
+stat_label <- paste0("r = ", round(ct$estimate, 2), ", p = ", round(ct$p.value, 3))
+
+p_pcl_opt_ptsd <- ggplot(plot_df, aes(x = PCL_score, y = opt_resp_learn)) +
+  geom_point(size = 1.2, alpha = 0.7, color = "black") +
+  geom_smooth(method = "lm", se = TRUE, alpha = 0.15, size = 0.5, color = "black", fill = "black") +
+  annotate("text", x = Inf, y = Inf, label = stat_label,
+           hjust = 1.05, vjust = 1.5, size = 2.2, color = "black") +
+  theme_classic(base_size = axes_tick_size) +
+  theme(axis.title = element_text(size = axes_labels_size),
+        axis.text  = element_text(size = axes_tick_size)) +
+  labs(x = "PCL Score", y = "Opt Resp (Learn)")
+print(p_pcl_opt_ptsd)
+#ggsave("fig2B_pclxlearn_opt.pdf", p_pcl_opt_ptsd, width = 5, height = 5, units = "cm")
+```
+
+## Fig 2C: Reversal: Group difference trajectories and slopes
+```{r}
+# Set Colors
+rev_col_light <- colorspace::lighten(rev_col, amount = 0.4)
+no_change_col_light <- colorspace::lighten(no_change_col, amount = 0.4)
+
+# Group difference in Reversal traces: Rev Cue and No Change Cue
+p_rev_no_change_trace <- sr_merge.recode_opt %>%
+  dplyr::filter(Study == study_include) %>%
+  dplyr::filter(Phase == 2) %>%
+  dplyr::filter(CueInfo %in% c("rev", "no_change")) %>%
+  group_by(Phase, Subject, Group, CuePres, CueInfo) %>%
+  summarise(plot_response = mean(orig_response, na.rm = TRUE), .groups = "drop") %>%
+  ggplot(aes(x = CuePres, y = plot_response, fill = interaction(Group, CueInfo), 
+             color = interaction(Group, CueInfo), group = interaction(Group, CueInfo))) + 
+  stat_summary(aes(shape = Group), fun = mean, geom = "point", alpha = 1, size = 1) + 
+  stat_summary(fun.data = mean_se, geom = "ribbon", alpha = 0.5, color = NA) +
+  stat_summary(fun = mean, geom = "line", alpha = 1, size = 0.5) + 
+  geom_hline(yintercept = 0.5, linetype = "dashed", size = 0.8, alpha = 0.7) +
+  scale_y_continuous(labels = scales::percent) +
+  scale_color_manual(values = c(TC.rev = rev_col_light, 
+                                PTSD.rev = rev_col, TC.no_change = no_change_col_light, PTSD.no_change = no_change_col)) +
+  scale_fill_manual(values = c(TC.rev = rev_col_light, 
+                               PTSD.rev = rev_col, TC.no_change = no_change_col_light, PTSD.no_change = no_change_col)) +
+  scale_shape_manual(values = c(TC = 1, PTSD = 16)) +
+  guides(color = "none", fill = "none") +
+  theme_classic(base_size = axes_tick_size) +
+  theme(axis.title = element_text(size = axes_labels_size), axis.text = element_text(size = axes_tick_size)) +
+  labs(x = "Stimulus Presentation", y = "Maintained Response from Learning")
+print(p_rev_no_change_trace)
+#ggsave("/Users/kbl26/Desktop/corrs/fig2_rev_no_change_trace_NEWCOLOR.pdf", 
+#       p_rev_no_change_trace, width = 7.5, height = 5, units = "cm")
+
+# Slopes inset figure
+slope_dat_rev <- sr_merge.recode_opt %>%
+  dplyr::filter(Study == study_include) %>%
+  dplyr::filter(Phase == 2) %>%
+  dplyr::filter(CueInfo %in% c("rev", "no_change")) %>%
+  group_by(Subject, Group, CueInfo, CuePres) %>%
+  summarise(plot_response = mean(orig_response, na.rm = TRUE), .groups = "drop") %>%
+  group_by(Subject, Group, CueInfo) %>%
+  summarise(slope = coef(lm(plot_response ~ CuePres))[2], .groups = "drop") %>%
+  mutate(Group = factor(Group, levels = c("TC", "PTSD")))
+
+slope_summary_rev <- slope_dat_rev %>%
+  group_by(Group, CueInfo) %>%
+  summarise(mean = mean(slope), se = sd(slope) / sqrt(n()), .groups = "drop")
+
+p_rev_no_change_slopes_blank <- ggplot(slope_summary_rev, 
+    aes(x = Group, y = mean, color = interaction(Group, CueInfo))) +
+  geom_pointrange(aes(ymin = mean - se, ymax = mean + se)) +
+  geom_hline(yintercept = 0, linetype = "dashed", size = 0.8, alpha = 0.7) +
+  scale_color_manual(values = c(TC.rev = rev_col_light, 
+                                PTSD.rev = rev_col, TC.no_change = no_change_col_light, PTSD.no_change = no_change_col)) +
+  facet_wrap(~ CueInfo) +
+  guides(color = "none") +
+  #ylim(NA, 0.003) +
+  theme_classic(base_size = axes_tick_size) +
+  theme(strip.text = element_blank(),
+        axis.title = element_text(size = axes_labels_size),
+        axis.text = element_text(size = axes_tick_size)) +
+  labs(x = "Group", y = "Slope (Response ~ Stimulus presentation)")
+print(p_rev_no_change_slopes_blank)
+
+#ggsave("fig2C_slopes_inset.pdf",
+#       p_rev_no_change_slopes_blank, width = 6, height = 6, units = "cm")
+
+# ---- stats ---- #
+input_model_data_block <- sr_merge.recode_opt %>%
+  dplyr::filter(Study == study_include) %>%
+  dplyr::filter(Phase == 2) %>%
+  dplyr::filter(CueInfo %in% c("no_change","rev")) %>%
+  group_by(Phase, Subject, Group, CueInfo, CuePres) %>%
+  summarise(orig_response = mean(orig_response, na.rm=T))
+
+rev_block_model_lmer <- lmerTest::lmer(orig_response ~ Group * CueInfo * CuePres + (1 | Subject),
+  data = input_model_data_block)
+
+#rev_block_model_lme <- lme(orig_response ~ Group * CueInfo * CuePres, random = ~1|Subject,
+#  data = input_model_data_block)
+
+anova(rev_block_model_lmer)
+emtrends(rev_block_model_lmer, pairwise ~ Group | CueInfo, var = "CuePres")
+
+# Age?
+input_model_data_block_age <- sr_merge.recode_opt %>%
+  dplyr::filter(Study == study_include) %>%
+  dplyr::filter(Phase == 2) %>%
+  dplyr::filter(CueInfo %in% c("no_change","rev")) %>%
+  group_by(Phase, Subject, Group, CueInfo, CuePres, demo_age) %>%
+  summarise(orig_response = mean(orig_response, na.rm=T))
+
+rev_block_model_age_lmer <- lmerTest::lmer(orig_response ~ Group * CueInfo * CuePres + demo_age + (1 | Subject),
+  data = input_model_data_block_age)
+anova(rev_block_model_age_lmer)
+```
+
+## Fig 2C: End of Reversal
+```{r}
+# Set dodge
+pd_last <- position_jitterdodge(dodge.width = 0.9, jitter.width = 0.12)
+
+# (1) bar plot second half reversal
+p_last_rev <- sr_merge.recode_opt %>% 
+  filter(Phase == 2 & Study %in% study_include & CueInfo %in% c("no_change","rev")) %>% 
+  filter(Block>5) %>% 
+  group_by(Subject, Group, CueInfo) %>%
+  summarise(orig_response = mean(orig_response, na.rm = TRUE), .groups = "drop") %>%
+  mutate(Group = factor(Group, levels = c("TC", "PTSD"))) %>%
+  ggplot(aes(x = CueInfo, y = orig_response, group = interaction(Group, CueInfo))) + 
+  stat_summary(aes(fill = interaction(Group, CueInfo), color = CueInfo), 
+               fun = mean, geom = "bar", position = position_dodge(0.9), alpha = 0.8, size = 0.5) +
+  geom_point(aes(color = CueInfo, fill = interaction(Group, CueInfo)), 
+             position = pd_last, shape = 21, size = 1.5, stroke = 0.5) +
+  stat_summary(aes(color = CueInfo), fun.data = mean_se, geom = "errorbar", 
+               position = position_dodge(0.9), width = 0) + 
+  scale_fill_manual(values = c(TC.no_change = "white", TC.rev = "white", PTSD.no_change = scales::alpha(no_change_col, 0.3),
+      PTSD.rev = scales::alpha(rev_col, 0.3)), guide = "none") +
+  scale_color_manual(values = c(no_change = no_change_col, rev = rev_col)) +
+  geom_hline(yintercept = 0.5, linetype = "dashed", size = 0.8, alpha = 0.7) +
+  theme_classic(base_size = axes_tick_size) +
+  theme(axis.title = element_text(size = axes_labels_size), axis.text = element_text(size = axes_tick_size),
+        legend.position = "none") +
+  scale_x_discrete(labels = c("no_change" = "No change", "rev" = "Reversed")) +
+  scale_y_continuous(labels = scales::percent) +
+  labs(x = "Stimulus type", y = "Maintained response from Learning")
+print(p_last_rev)
+#ggsave("fig2_last2blocks_rev_NEWCOLOR.pdf", p_last_rev, width = 5, height = 5, units = "cm")
+
+# -------------- Stats ------------------ 
+revmod_allcue_block_last2<- sr_merge.recode_opt %>%
+  filter(Phase == 2 & Study %in% study_include & CueInfo %in% c("no_change","rev")) %>% 
+  filter(Block>5) %>% 
+  group_by(Group, Subject, CueInfo) %>%
+  summarise(orig_response = mean(orig_response, na.rm = TRUE), .groups = "drop")
+
+revmod_allcue_block_last2_model <- lmerTest::lmer(orig_response ~ Group * CueInfo + (1 | Subject),
+  data = revmod_allcue_block_last2)
+
+anova(revmod_allcue_block_last2_model)
+emmeans(revmod_allcue_block_last2_model, pairwise ~ Group|CueInfo)
+
+# (2) Bar plots all of reversal
+p_all_rev <- sr_merge.recode_opt %>% 
+  filter(Phase == 2 & Study %in% study_include & CueInfo %in% c("no_change","rev")) %>% 
+  group_by(Subject, Group, CueInfo) %>%
+  summarise(orig_response = mean(orig_response, na.rm = TRUE), .groups = "drop") %>%
+  mutate(Group = factor(Group, levels = c("TC", "PTSD"))) %>%
+  ggplot(aes(x = CueInfo, y = orig_response, group = interaction(Group, CueInfo))) + 
+  stat_summary(aes(fill = interaction(Group, CueInfo), color = CueInfo), 
+               fun = mean, geom = "bar", position = position_dodge(0.9), alpha = 0.8, size = 0.5) +
+  geom_point(aes(color = CueInfo, fill = interaction(Group, CueInfo)), 
+             position = pd_last, shape = 21, size = 1.5, stroke = 0.5) +
+  stat_summary(aes(color = CueInfo), fun.data = mean_se, geom = "errorbar", 
+               position = position_dodge(0.9), width = 0) + 
+  scale_fill_manual(values = c(TC.no_change = "white", TC.rev = "white", PTSD.no_change = scales::alpha(no_change_col, 0.3),
+      PTSD.rev = scales::alpha(rev_col, 0.3)), guide = "none") +
+  scale_color_manual(values = c(no_change = no_change_col, rev = rev_col)) +
+  geom_hline(yintercept = 0.5, linetype = "dashed", size = 0.8, alpha = 0.7) +
+  theme_classic(base_size = axes_tick_size) +
+  theme(axis.title = element_text(size = axes_labels_size), axis.text = element_text(size = axes_tick_size),
+        legend.position = "none") +
+  scale_x_discrete(labels = c("no_change" = "No change", "rev" = "Reversed")) +
+  scale_y_continuous(labels = scales::percent) +
+  labs(x = "Stimulus type", y = "Maintained response from Learning")
+print(p_all_rev)
+#ggsave("/Users/kbl26/Desktop/corrs/fig2_all_rev_NEWCOLOR.pdf", 
+#      p_all_rev, width = 5, height = 5, units = "cm")
+
+```
+
+## Fig 2D: Deval group comparison
+```{r}
+# Set dodge
+pd_last <- position_jitterdodge(dodge.width = 0.9, jitter.width = 0.12)
+
+p_deval <- sr_merge.recode_opt %>% 
+  filter(Study %in% study_include & Phase == 3 & Block == 2 & CueInfo %in% c("no_change","deval")) %>% 
+  group_by(Subject, Group, CueInfo) %>%
+  summarise(orig_response = mean(orig_response, na.rm = TRUE), .groups = "drop") %>%
+  mutate(Group = factor(Group, levels = c("TC", "PTSD"))) %>%
+  ggplot(aes(x = CueInfo, y = orig_response, group = interaction(Group, CueInfo))) + 
+  stat_summary(aes(fill = interaction(Group, CueInfo), color = CueInfo), 
+               fun = mean, geom = "bar", position = position_dodge(0.9), alpha = 0.8, size = 0.5) +
+  geom_point(aes(color = CueInfo, fill = interaction(Group, CueInfo)), 
+             position = pd_last, shape = 21, size = 1.5, stroke = 0.5) +
+  stat_summary(aes(color = CueInfo), fun.data = mean_se, geom = "errorbar", position = position_dodge(0.9), width = 0) + 
+  scale_fill_manual(values = c(TC.no_change = "white", TC.deval = "white",
+        PTSD.no_change = scales::alpha(no_change_col, 0.3), PTSD.deval = scales::alpha(deval_col, 0.3)), guide = "none") +
+  scale_color_manual(values = c(no_change = no_change_col, deval = deval_col)) +
+  theme_classic(base_size = axes_tick_size) +
+  theme(axis.title = element_text(size = axes_labels_size), axis.text = element_text(size = axes_tick_size)) +
+  scale_x_discrete(labels = c("no_change" = "No change", "deval" = "Devalued"), limits = c("no_change", "deval")) +
+  scale_y_continuous(labels = scales::percent) +
+  labs(x = "Stimulus type", y = "Maintained response from Learning")
+print(p_deval)
+
+# ------- Stats --------- #
+# Deval vs no-change (using emmeans)
+deval_data <- sr_merge.recode_opt %>% 
+  filter(Study %in% study_include & Phase == 3 & Block == 2 & CueInfo %in% c("no_change","deval")) %>% 
+  group_by(Subject, Group, CueInfo) %>%
+  summarise(orig_response = mean(orig_response, na.rm = TRUE), .groups = "drop") %>%
+  mutate(Group = factor(Group, levels = c("TC", "PTSD")))
+
+deval_model <- lmerTest::lmer(orig_response ~ Group * CueInfo + (1 | Subject),
+  data = deval_data)
+anova(deval_model)
+emmeans(deval_model, pairwise ~ CueInfo | Group, adjust = "fdr")
+
+# Deval vs no-change (using t.test)
+tc_deval_sr <- deval_data %>%
+  filter(Group == "TC") %>%
+  pivot_wider(id_cols = Subject, names_from = CueInfo, values_from = orig_response)
+
+t.test(tc_deval_sr$no_change, tc_deval_sr$deval, paired = TRUE)
+
+# vs chance
+deval_chance <- deval_data %>%
+  filter(CueInfo == "deval") %>%
+  group_by(Group) %>%
+  summarise(
+    n       = n(),
+    mean    = mean(orig_response),
+    sd      = sd(orig_response),
+    t_stat  = t.test(orig_response, mu = 0.5)$statistic,
+    df_t    = t.test(orig_response, mu = 0.5)$parameter,
+    p_val   = t.test(orig_response, mu = 0.5)$p.value,
+    ci_low  = t.test(orig_response, mu = 0.5)$conf.int[1],
+    ci_high = t.test(orig_response, mu = 0.5)$conf.int[2],
+    .groups = "drop"
+  )
+
+print(deval_chance)
+#ggsave("fig2_block2_deval_NEWCOLOR.pdf", p_deval, width = 7, height = 5, units = "cm")
+```
+
+## Fig. 2E: Deval x PCL
+```{r}
+# ---- Set plotting data --- #
+plot_data <- sr_merge.recode_opt %>% 
+  filter(Study == study_include, Phase == 3, Block == 2,
+         CueInfo %in% c("no_change","deval"),!Subject %in% c("7015", "7021")) %>%
+  group_by(Subject, Group, CueInfo) %>%
+  summarise(avg_orig_response = mean(orig_response, na.rm = TRUE), .groups = "drop") %>%
+  left_join(self_report %>% select(Subject, PCL_score), by = "Subject")
+
+# ---- Plot ---- #
+p_deval_pcl_only_PTSD <- plot_data %>%
+  filter(Group != "TC" & CueInfo %in% c("deval", "no_change")) %>%
+  ggplot(aes(x = PCL_score, y = avg_orig_response, color = CueInfo, fill = CueInfo)) +
+  geom_point(alpha = 0.6, size = 1) +
+  geom_smooth(method = "lm", se = TRUE, alpha = 0.2, size = 0.5) +
+  scale_color_manual(values = c(deval = deval_col, no_change = no_change_col),
+                     labels = c(deval = "Devalued", no_change = "No Change")) +
+  scale_fill_manual(values = c(deval = deval_col, no_change = no_change_col),
+                    labels = c(deval = "Devalued", no_change = "No Change")) +
+  scale_y_continuous(labels = scales::percent) +
+  theme_classic(base_size = axes_tick_size) +
+  theme(axis.title = element_text(size = axes_labels_size), 
+        axis.text = element_text(size = axes_tick_size)) +
+  labs(x = "PCL Score", y = "Maintained response from Learning", color = "Stimulus type", fill = "Stimulus type")
+print(p_deval_pcl_only_PTSD) #ggsave("fig2C_DevalxPCL.pdf", p_deval_pcl_only_PTSD, width = 8, height = 5, units = "cm")
+
+# ----- Stats ----- #
+plot_data_stats <- sr_merge.recode_opt %>% 
+  filter(Study == study_include, Phase == 3, Block == 2, Group == "PTSD", 
+         CueInfo %in% c("no_change","deval"),!Subject %in% c("7015", "7021")) %>%
+  group_by(Subject, Group, CueInfo) %>%
+  summarise(avg_orig_response = mean(orig_response, na.rm = TRUE), .groups = "drop") %>%
+  left_join(self_report %>% select(Subject, PCL_score), by = "Subject")
+
+deval_pcl <- lmerTest::lmer(avg_orig_response ~ PCL_score * CueInfo + (1 | Subject), data = plot_data_stats)
+deval_pcl <- lme(avg_orig_response ~ PCL_score * CueInfo, random = ~1 | Subject, data = plot_data_stats)
+anova(deval_pcl)
+test(emtrends(deval_pcl, var = "PCL_score", pairwise ~ CueInfo))
+
+# age?
+plot_data_stats_age <- sr_merge.recode_opt %>% 
+  filter(Study == study_include, Phase == 3, Block == 2, Group == "PTSD", 
+         CueInfo %in% c("no_change","deval"),!Subject %in% c("7015", "7021")) %>%
+  group_by(Subject, Group, CueInfo) %>%
+  summarise(avg_orig_response = mean(orig_response, na.rm = TRUE), .groups = "drop") %>%
+  left_join(self_report %>% select(Subject, PCL_score, demo_age), by = "Subject")
+deval_pcl_age <- lmerTest::lmer(avg_orig_response ~ PCL_score * CueInfo + demo_age + (1 | Subject), data = plot_data_stats_age)
+anova(deval_pcl_age)
+```
+
+## Supp 2A: Average number of learned stimuli per group [0-6]
+```{r}
+# Set dodge
+pd <- position_jitterdodge(dodge.width = 0.9, jitter.width = 0.12)
+
+# ---- Plot ---- #
+p_num_learned_stim <- sr_merge.recode_opt %>%
+  filter(Study == study_include, Phase %in% c(1, 2)) %>%
+  group_by(Group, Subject, Phase, Cue) %>%
+  summarise(learned_state = first(learned_yn), .groups = "drop") %>%
+  group_by(Group, Subject, Phase) %>% 
+  summarise(num_learned_states = sum(learned_state == 1, na.rm = TRUE), .groups = "drop") %>%
+  mutate(Phase = factor(Phase, levels = c(1, 2), labels = c("Learning", "Reversal")),
+         Group = factor(Group, levels = c("TC", "PTSD"))) %>%
+  ggplot(aes(x = Group, y = num_learned_states, fill = Phase)) +
+  stat_summary(fun = mean, geom = "bar", position = position_dodge(0.9), width = 0.8, alpha = 0.8) +
+  geom_point(data = . %>% filter(Group == "TC"),
+             aes(color = Phase), fill = "white",
+             position = pd, shape = 21, size = 1.5, stroke = 0.5) +
+  geom_point(data = . %>% filter(Group == "PTSD"),
+             aes(fill = Phase, color = Phase),
+             position = pd, shape = 21, size = 1.5, stroke = 0.5) +
+  stat_summary(fun.data = mean_se, geom = "errorbar",
+               position = position_dodge(0.9), width = 0.1, size = 0.5, color = "grey30") +
+  scale_y_continuous(limits = c(0, 6), breaks = 0:6) +
+  scale_fill_manual(values = c(Learning = scales::alpha("#3B8FBF", 0.3), Reversal = scales::alpha(rev_col, 0.3))) +
+  scale_color_manual(values = c("Learning" = "#3B8FBF", "Reversal" = rev_col), guide = "none") +
+  theme_classic(base_size = axes_tick_size) +
+  theme(axis.title = element_text(size = axes_labels_size), axis.text = element_text(size = axes_tick_size),
+        legend.title = element_text(size = axes_tick_size), legend.text = element_text(size = axes_tick_size),
+        plot.title = element_text(size = axes_labels_size + 1, face = "bold")) +
+  labs(x = "Group", y = "Number of learned states (0–6)", fill = "Phase")
+print(p_num_learned_stim) 
+#ggsave("Supp2A_learned_states.pdf", p_num_learned_stim, width = 7, height = 5, units = "cm")
+
+# ---- Stats ---- #
+learn_state_df <- sr_merge.recode_opt %>%
+  #filter(Study == study_include, Phase %in% c(1, 2)) %>%
+  filter(Study == study_include, Phase == 1) %>%
+  #filter(CueInfo=="no_change") %>%
+  group_by(Group, Subject, Phase, Cue) %>%
+  summarise(learned_state = first(learned_yn), .groups = "drop") %>%
+  group_by(Group, Subject, Phase) %>%
+  summarise(num_learned_states = sum(learned_state == 1, na.rm = TRUE), .groups = "drop") %>%
+  mutate(Phase = factor(Phase), Group = factor(Group), Subject = factor(Subject))
+
+learn_state_model <- lm(num_learned_states ~ Group, data = learn_state_df)
+anova(learn_state_model)
+```
+
+## Supp 2B: destabalized?
+```{r}
+# Set dodge
+pd_phase <- position_jitterdodge(dodge.width = 0.9, jitter.width = 0.12)
+
+# ---- Filter df ---- #
+df_late_learn_early_rev_no_change <- sr_merge.recode_opt %>%
+  filter(Study == study_include, CueInfo == "no_change") %>%
+  filter((Phase == 1 & Block > 5) | (Phase == 2 & Block < 6)) %>%
+  mutate(Phase_label = factor(ifelse(Phase == 1, "Late Learning", "Early Reversal"),
+                              levels = c("Late Learning", "Early Reversal"))) %>%
+  group_by(Subject, Group, Phase_label) %>%
+  summarise(Opt_resp = mean(Opt_resp, na.rm = TRUE), .groups = "drop")
+
+# Two shades of no_change_col
+no_change_dark  <- no_change_col
+no_change_light <- scales::alpha(no_change_col, 0.4)
+
+# ---- Plot ---- #
+p_late_learn_early_rev_no_change <- ggplot(df_late_learn_early_rev_no_change,
+                                           aes(x = Group, y = Opt_resp, group = Phase_label)) +
+  stat_summary(aes(fill = Phase_label), fun = mean, geom = "bar",
+               position = position_dodge(0.9), width = 0.7, color = no_change_col, size = 0.5) +
+  geom_point(aes(fill = interaction(Group, Phase_label),
+                 color = Phase_label),
+             position = pd_phase, shape = 21, size = 1.5, stroke = 0.5) +
+  stat_summary(fun.data = mean_se, geom = "errorbar",
+               position = position_dodge(0.9), width = 0) +
+  geom_hline(yintercept = 0.5, linetype = "dashed", size = 0.8, alpha = 0.7) +
+  scale_y_continuous(labels = scales::percent) +
+  scale_x_discrete(limits = c("TC", "PTSD")) +
+  scale_fill_manual(values = c(
+    "Late Learning"               = no_change_dark,
+    "Early Reversal"              = no_change_light,
+    "TC.Late Learning"            = "white",
+    "TC.Early Reversal"           = "white",
+    "PTSD.Late Learning"          = no_change_dark,
+    "PTSD.Early Reversal"         = no_change_light
+  ), breaks = c("Late Learning", "Early Reversal")) +
+  scale_color_manual(values = c(
+    "Late Learning"  = no_change_dark,
+    "Early Reversal" = no_change_light
+  ), guide = "none") +
+  theme_classic(base_size = axes_tick_size) +
+  theme(axis.title  = element_text(size = axes_labels_size),
+        axis.text   = element_text(size = axes_tick_size),
+        legend.title = element_text(size = axes_tick_size),
+        legend.text  = element_text(size = axes_tick_size)) +
+  labs(x = "Group", y = "Optimal response", fill = "Phase")
+print(p_late_learn_early_rev_no_change)
+#ggsave("Supp2_destabilize.pdf",p_late_learn_early_rev_no_change, width = 8, height = 5, units = "cm")
+
+# ---- Stats ---- #
+stats_df_no_change <- sr_merge.recode_opt %>%
+  filter(Study == study_include, CueInfo == "no_change") %>%
+  filter((Phase == 1 & Block > 5) | (Phase == 2 & Block < 6)) %>%
+  mutate(Phase_label = factor(ifelse(Phase == 1, "Early Reversal", "Late Learning"),
+                              levels = c("Early Reversal", "Late Learning")))
+
+# Model
+no_change_model <- lmerTest::lmer(Opt_resp ~ Group * Phase_label + (1 | Subject),
+                                  data = stats_df_no_change)
+anova(no_change_model)
+emmeans(no_change_model, pairwise ~ Phase_label)
+emmeans(no_change_model, pairwise ~ Phase_label|Group)
+```
+## Supp 2C: Reverse specific deficit
+```{r}
+p_learnish <- sr_merge.recode_opt %>%
+  filter(Phase %in% c(1, 2), Study == study_include, CueInfo == "rev", CuePres > 25) %>%
+  group_by(Group, Subject, Phase, CuePres) %>%
+  summarise(opt_response = mean(Opt_resp, na.rm = TRUE), .groups = "drop") %>%
+  mutate(Group = factor(Group, levels = c("TC", "PTSD"))) %>%
+  ggplot(aes(x = CuePres, y = opt_response, color = factor(Phase), fill = factor(Phase), group = Phase)) +
+  stat_summary(fun = mean, geom = "line", size = 0.5) +
+  stat_summary(aes(shape = Group), fun = mean, geom = "point", size = 0.75, stroke = 0.5) +
+  stat_summary(fun.data = mean_se, geom = "ribbon", alpha = 0.2, color = NA, aes(group = Phase)) +
+  geom_hline(yintercept = 0.5, linetype = "dashed") +
+  facet_grid(. ~ Group) +
+  scale_y_continuous(labels = percent_format()) +
+  scale_x_continuous(breaks = pretty_breaks()) +
+  scale_color_manual(name = "Phase", values = c("1" = "#3B8FBF", "2" = rev_col), 
+                     labels = c("1" = "Learning", "2" = "Reversal")) +
+  scale_fill_manual(name = "Phase", values = c("1" = "#3B8FBF", "2" = rev_col), 
+                    labels = c("1" = "Learning", "2" = "Reversal")) +
+  scale_shape_manual(values = c(TC = 1, PTSD = 16), guide = "none") +
+  theme_classic(base_size = axes_tick_size) +
+  theme(axis.title = element_text(size = axes_labels_size), axis.text = element_text(size = axes_tick_size)) +
+  labs(x = "Stimulus Presentation", y = "Optimal Response")
+
+print(p_learnish)
+#ggsave("Supp2D_rev_specific_deficit.pdf", p_learnish, width = 8, height = 5, units = "cm")
+
+# ---- stats ---- #
+rev_cue_only <- sr_merge.recode_opt %>% 
+  filter(Phase %in% c(1, 2), Study == study_include, CueInfo == "rev") %>%
+  filter(Block > 5) %>%
+  group_by(Group, Subject, Phase, CuePres) %>%
+  summarise(opt_response = mean(Opt_resp, na.rm = TRUE), .groups = "drop")
+
+rev_learn_model_lmer <- lmerTest::lmer(opt_response ~ Group * Phase * CuePres + (1 | Subject), data = rev_cue_only)
+rev_learn_model_lme <- lme(opt_response ~ Group * Phase * CuePres, random = ~1|Subject, data = rev_cue_only)
+
+anova(rev_learn_model_lmer)
+emmeans(rev_learn_model_lme, pairwise ~ Phase|Group)
+```
+
+# Nonfig: Setup PCL score correlations: PCL x behavior/Model params/ brain (beta)
+```{r}
+# Create function to run correlations
+get_pcl_cors <- function(grp, pcl_var = "PCL_score") {
+  # Input: 
+  #  grp: "PTSD" or "TC"
+  #  pcl_var: any of "PCL_score", "pcl_clustB", "pcl_clustC", "pcl_clustD", "pcl_clustE"
+  
+  df <- behav_vars_summary_join %>%
+    filter(Group == grp) %>%
+    select(PCL_score, pcl_clustB, pcl_clustC, pcl_clustD, pcl_clustE,
+           opt_resp_learn, opt_resp_rev, win_stay_learn, win_stay_rev,
+           withhold, update, A_win, tau, p, beta_learn_1, beta_learn_2) %>%
+    as.matrix()
+  
+  cor_out <- Hmisc::rcorr(df)
+  n <- sum(!is.na(df[, pcl_var]))
+  df_val <- n - 2
+  
+  data.frame(
+    variable = colnames(df),
+    r        = round(cor_out$r[pcl_var, ], 3),
+    p        = round(cor_out$P[pcl_var, ], 3),
+    df       = df_val
+  ) %>%
+    filter(variable != pcl_var)
+}
+
+# Run PTSD
+pcl_cors_ptsd <- get_pcl_cors("PTSD", "PCL_score")
+pclE_cors_ptsd <- get_pcl_cors("PTSD", "pcl_clustE") 
+print(pcl_cors_ptsd)
+print(pclE_cors_ptsd)
+
+# Run TC
+pcl_cors_tc   <- get_pcl_cors("TC",   "PCL_score")
+pclE_cors_tc   <- get_pcl_cors("TC",   "pcl_clustE")
+print(pcl_cors_tc)
+print(pclE_cors_tc)
+```
+
+## Supp 5A&B
+```{r}
+# ---- Prep long df ---- #
+pcl_scatter_df <- behav_vars_summary_join %>%
+  select(Subject, Group, PCL_score, pcl_clustE,
+         opt_resp_learn, win_stay_learn, A_win, beta_learn_2)
+
+# ---- Helper function ---- #
+plot_pcl_scatter <- function(data, x_var, y_var, x_label, y_label) {
+  
+  plot_df <- data %>%
+    select(Subject, Group, all_of(c(x_var, y_var))) %>%
+    filter(!is.na(.data[[x_var]]), !is.na(.data[[y_var]]))
+  
+  # Compute r and p per group
+  get_stats <- function(grp) {
+    d <- plot_df %>% filter(Group == grp)
+    ct <- cor.test(d[[x_var]], d[[y_var]])
+    data.frame(
+      Group = grp,
+      label = paste0("r = ", round(ct$estimate, 2), ", p = ", round(ct$p.value, 3))
+    )
+  }
+  stats_df <- bind_rows(get_stats("PTSD"), get_stats("TC")) %>%
+    mutate(x = Inf, y = ifelse(Group == "PTSD", Inf, -Inf),
+           vjust = ifelse(Group == "PTSD", 1.5, -0.5),
+           color = ifelse(Group == "PTSD", "black", "grey50"))
+  
+  ggplot(plot_df, aes(x = .data[[x_var]], y = .data[[y_var]], color = Group)) +
+    geom_point(size = 1.2, alpha = 0.7) +
+    geom_smooth(method = "lm", se = TRUE, alpha = 0.15, size = 0.5) +
+    geom_text(data = stats_df %>% filter(Group == "PTSD"),
+              aes(x = x, y = y, label = label, vjust = vjust),
+              hjust = 1.05, size = 2.2, color = "black", inherit.aes = FALSE) +
+    geom_text(data = stats_df %>% filter(Group == "TC"),
+              aes(x = x, y = y, label = label, vjust = vjust),
+              hjust = 1.05, size = 2.2, color = "grey50", inherit.aes = FALSE) +
+    scale_color_manual(values = c(PTSD = "black", TC = "grey50")) +
+    scale_fill_manual(values  = c(PTSD = "black", TC = "grey50")) +
+    theme_classic(base_size = axes_tick_size) +
+    theme(axis.title = element_text(size = axes_labels_size),
+          axis.text  = element_text(size = axes_tick_size),
+          legend.position = "none") +
+    labs(x = x_label, y = y_label)
+}
+
+# ---- Generate plots ---- #
+p_pcl_opt  <- plot_pcl_scatter(pcl_scatter_df, "PCL_score",  "opt_resp_learn", "PCL Score",   "Opt Resp (Learn)")
+p_pcl_ws   <- plot_pcl_scatter(pcl_scatter_df, "PCL_score",  "win_stay_learn", "PCL Score",   "Win-Stay (Learn)")
+p_pcl_awin <- plot_pcl_scatter(pcl_scatter_df, "PCL_score",  "A_win",          "PCL Score",   "α win")
+p_clE_awin <- plot_pcl_scatter(pcl_scatter_df, "pcl_clustE", "A_win",          "PCL Arousal", "α win")
+p_clE_opt  <- plot_pcl_scatter(pcl_scatter_df, "pcl_clustE", "opt_resp_learn", "PCL Arousal", "Opt Resp (Learn)")
+p_clE_ws   <- plot_pcl_scatter(pcl_scatter_df, "pcl_clustE", "win_stay_learn", "PCL Arousal", "Win-Stay (Learn)")
+p_clE_beta <- plot_pcl_scatter(pcl_scatter_df, "pcl_clustE", "beta_learn_2",   "PCL Arousal", "β Learn 2")
+
+print(p_pcl_opt)
+print(p_pcl_ws)
+print(p_pcl_awin)
+print(p_clE_opt)
+print(p_clE_ws)
+print(p_clE_awin)
+print(p_clE_beta)
+
+#ggsave("Supp5A_pcl_opt.pdf", p_pcl_opt, width = 5, height = 5, units = "cm")
+#ggsave("Supp5A_pcl_ws.pdf", p_pcl_ws, width = 5, height = 5, units = "cm")
+#ggsave("Supp5A_pcl_awin.pdf", p_pcl_awin, width = 5, height = 5, units = "cm")
+#ggsave("Supp5A_pclE_opt.pdf", p_clE_opt, width = 5, height = 5, units = "cm")
+#ggsave("Supp5A_pclE_ws.pdf", p_clE_ws, width = 5, height = 5, units = "cm")
+#ggsave("Supp5A_pclE_awin.pdf", p_clE_awin, width = 5, height = 5, units = "cm")
+#ggsave("Supp5A_pcl_beta.pdf", p_clE_beta, width = 5, height = 5, units = "cm")
+```
+
+# --------------------------------------- Neuroimaging + behavior ----------------------------------------------#
+
+## Nonfig: betas stats
+```{r}
+# ---- Stats ---- #
+betas_putam <- betas %>%
+  filter(roi == "putam") %>%
+  filter(run %in% c("learn_1","learn_2"))
+
+model_betas_putam_lmer <- lmerTest::lmer(mean_beta ~  Group + run + pe + (1 | Subject), data = betas_putam)
+model_betas_putam_lme <- lme(mean_beta ~  Group * run * pe, random=~1|Subject, data = betas_putam)
+
+anova(model_betas_putam_lmer)
+emmeans(model_betas_putam_lmer, pairwise ~ Group)
+emmeans(model_betas_putam_lmer, pairwise ~ pe)
+emmeans(model_betas_putam_lme, pairwise ~ run)
+emmeans(model_betas_putam_lme, pairwise ~ run|Group)
+
+# ONLY PTSD
+betas_putam_ptsd <- betas %>%
+  filter(Group == "PTSD") %>%
+  filter(roi == "putam") %>%
+  filter(run %in% c("learn_1","learn_2"))
+model_betas_putam_lmer_ptsd <- lmerTest::lmer(mean_beta ~  run + pe + (1 | Subject), data = betas_putam_ptsd)
+model_betas_putam_lme_ptsd <- lme(mean_beta ~  run + pe , random=~1|Subject, data = betas_putam_ptsd)
+
+anova(model_betas_putam_lmer_ptsd)
+anova(model_betas_putam_lme_ptsd)
+
+# ONLY TC
+betas_putam_tc <- betas %>%
+  filter(Group == "TC") %>%
+  filter(roi == "putam") %>%
+  filter(run %in% c("learn_1","learn_2"))
+model_betas_putam_lmer_tc <- lmerTest::lmer(mean_beta ~  run + pe + (1 | Subject), data = betas_putam_tc)
+model_betas_putam_lme_tc <- lme(mean_beta ~  run + pe , random=~1|Subject, data = betas_putam_tc)
+anova(model_betas_putam_lme_tc)
+```
+
+# Fig 3A new: opt v nonopt by group
+```{r}
+betas_opt_nonopt_paired <- betas %>%
+  filter(roi == "putam") %>%
+  filter(run %in% c("learn_1","learn_2")) %>%
+  group_by(Group, Subject, pe) %>%
+  summarise(mean_beta = mean(mean_beta, na.rm = TRUE), .groups = "drop") %>%
+  mutate(pe_label = factor(case_when(pe == 1 ~ "Optimal",
+                                     pe == 2 ~ "Nonoptimal"),
+                           levels = c("Nonoptimal", "Optimal")),
+         Group = factor(Group, levels = c("TC", "PTSD")))
+
+p_opt_nonopt_paired <- ggplot(betas_opt_nonopt_paired, 
+                              aes(x = pe_label, y = mean_beta)) +
+  geom_line(aes(group = Subject), color = "grey50", alpha = 0.4, size = 0.3) +
+  stat_summary(fun = mean, geom = "bar",
+               width = 0.8, color = "grey30", alpha = 0.3, size = 0.2) +
+  stat_summary(fun.data = mean_se, geom = "errorbar",
+               color = "black", width = 0, size = 1) +
+  facet_grid(. ~ Group) +
+  theme_classic(base_size = axes_tick_size) +
+  theme(axis.title = element_text(size = axes_labels_size),
+        axis.text  = element_text(size = axes_tick_size),
+        strip.background = element_rect(fill = "white", color = "black")) +
+  labs(x = "Response type", y = "Putamen response")
+print(p_opt_nonopt_paired)
+#ggsave("fig3A_betas_opt_group.pdf",p_opt_nonopt_paired, width = 5, height = 5, units = "cm")
+
+```
+
+# Fig 3B New: learn x group
+```{r}
+# Set Phase colors #
+run1_col <- "salmon"      # learn_1
+run2_col <- "mediumturquoise"  # learn_2
+
+# Figure 2: learn_1 vs learn_2 (paired, by subject)
+betas_run_paired <- betas %>%
+  filter(roi == "putam") %>%
+  #filter(pe == 1) %>%
+  filter(run %in% c("learn_1","learn_2")) %>%
+  group_by(Group, Subject, run) %>%
+  summarise(mean_beta = mean(mean_beta, na.rm = TRUE), .groups = "drop") %>%
+  mutate(Group = factor(Group, levels = c("TC", "PTSD")),
+         run = factor(run, levels = c("learn_1", "learn_2")))
+
+p_run_paired <- ggplot(betas_run_paired,
+                       aes(x = run, y = mean_beta)) +
+  geom_line(aes(group = Subject), color = "grey50", alpha = 0.3, size = 0.3) +
+  stat_summary(fun = mean, geom = "bar",
+               width = 0.8, color = "grey30", alpha = 0.3, size = 0.2) +
+  stat_summary(fun.data = mean_se, geom = "errorbar",
+               color = "black", width = 0, size = 1) +
+  facet_grid(. ~ Group) +
+  theme_classic(base_size = axes_tick_size) +
+  theme(axis.title = element_text(size = axes_labels_size),
+        axis.text  = element_text(size = axes_tick_size),
+        strip.background = element_rect(fill = "white", color = "black")) +
+  labs(x = "Run", y = "Putamen (optimal)")
+print(p_run_paired)
+#ggsave("fig3B_betas_opt_group_NEW.pdf",p_run_paired, width = 5, height = 5, units = "cm")
+
+# ---- Stats ---- #
+paired_tests <- betas %>%
+  filter(roi == "putam") %>%
+  #filter(pe == 1) %>%
+  filter(run %in% c("learn_1", "learn_2")) %>%
+  group_by(Group, Subject, run) %>%
+  summarise(mean_beta = mean(mean_beta, na.rm = TRUE),
+            .groups = "drop") %>%
+  pivot_wider(names_from = run,
+              values_from = mean_beta)
+
+# TC
+t.test(
+  paired_tests$learn_1[paired_tests$Group == "TC"],
+  paired_tests$learn_2[paired_tests$Group == "TC"],
+  #paired = TRUE
+)
+
+# PTSD
+t.test(
+  paired_tests$learn_1[paired_tests$Group == "PTSD"],
+  paired_tests$learn_2[paired_tests$Group == "PTSD"],
+  paired = TRUE
+)
+```
+# Fig 3C: Betas and rev performance
+```{r}
+# Inner join the dataframes and filter
+behav_data <- sr_merge.recode_opt %>%
+  filter(Study == study_include) %>%
+  filter(Phase == 2) %>%
+  filter(Block > 8) %>%
+  filter(CueInfo == "rev") %>%
+  group_by(Subject, Group) %>%
+  summarise(orig_response = mean(orig_response, na.rm = TRUE), .groups = "drop")
+
+# Filter and summarize beta data
+beta_data <- betas %>%
+  filter(pe == 1) %>% 
+  filter(roi == "putam") %>%
+  filter(run == "learn_2") %>%
+  #filter(run %in% c("learn_1","learn_2")) %>%
+  group_by(Subject) %>%
+  summarise(mean_beta = mean(mean_beta, na.rm = TRUE), .groups = "drop")
+
+# Join the two datasets
+plot_data <- behav_data %>%
+  inner_join(beta_data, by = "Subject")
+
+# Plot
+p_betaL_revResp <- ggplot(plot_data, aes(x = mean_beta, y = orig_response)) +
+  geom_point(aes(shape = Group, fill = Group), color = rev_col, size = 1, alpha = 0.8, stroke = 0.5) +
+  geom_smooth(method = "lm", se = TRUE, alpha = 0.3, color = rev_col, fill = rev_col) +
+  scale_shape_manual(values = c(TC = 21, PTSD = 19)) +
+  scale_fill_manual(values = c(TC = "white", PTSD = rev_col)) +
+  scale_y_continuous(labels = scales::percent) +
+  theme_classic(base_size = axes_tick_size) +
+  theme(axis.title = element_text(size = axes_labels_size), 
+        axis.text = element_text(size = axes_tick_size)) +
+  labs(x = "Mean Beta", y = "Maintained response from learning")
+print(p_betaL_revResp)
+
+#ggsave("fig3C_betas_revResp.pdf",p_betaL_revResp, width = 7, height = 5, units = "cm")
+
+# linear model
+model <- lm(orig_response ~ mean_beta * Group, data = plot_data)
+#model <- lm(orig_response ~ mean_beta, data = plot_data)
+anova(model)
+
+# get slope
+model_main <- lm(orig_response ~ mean_beta + Group, data = plot_data)
+anova(model)
+summary(model_main)
+coef(model_main)["mean_beta"]
+
+
+# bi-variate corrs:
+ct_all <- cor.test(plot_data$mean_beta, plot_data$orig_response)
+cat("Overall: r =", round(ct_all$estimate, 3),
+    ", p =", round(ct_all$p.value, 3),
+    ", df =", ct_all$parameter, "\n")
+
+# Correlation by group
+for (grp in c("PTSD", "TC")) {
+  d <- plot_data %>% filter(Group == grp)
+  ct <- cor.test(d$mean_beta, d$orig_response)
+  cat(grp, ": r =", round(ct$estimate, 3),
+      ", p =", round(ct$p.value, 3),
+      ", df =", ct$parameter, "\n")
+}
+
+
+p_betaL_revResp <- ggplot(plot_data, aes(x = mean_beta, y = orig_response, color = Group, fill = Group)) +
+  geom_point(aes(shape = Group), size = 1, alpha = 0.8, stroke = 0.5) +
+  geom_smooth(method = "lm", se = TRUE, alpha = 0.15) +
+  scale_shape_manual(values = c(TC = 21, PTSD = 19)) +
+  scale_color_manual(values = c(TC = "blue", PTSD = "red")) +
+  scale_fill_manual(values  = c(TC = "blue", PTSD = "red")) +
+  scale_y_continuous(labels = scales::percent) +
+  theme_classic(base_size = axes_tick_size) +
+  theme(axis.title = element_text(size = axes_labels_size),
+        axis.text  = element_text(size = axes_tick_size)) +
+  labs(x = "Mean Beta", y = "Maintained response from learning")
+print(p_betaL_revResp)
+```
+
+
+# --------------------------------------- Modeling params + behavior ----------------------------------------------#
+
+# Fig 4C: PCL x A_win
+```{r}
+# ---- This plot is generated in cell "Supp 5A&B" ---- #
+
+# Print it here, for organization.
+print(p_pcl_awin)
+```
+
+
+# Fig 4D: Reversal/Deval x model params
+```{r}
+# ---- prep df for plotting ---- #
+params_behav_df <- behav_vars_summary_join %>% select(Subject,Group,A_win,tau,p,update_response_mean_rev,win_stay_rev, withhold,update) %>%
+  dplyr::rename(update_deval =update) %>%
+  dplyr::rename(withhold_deval=withhold)
+
+# ---- Plot ---- #
+# Colors for the two behavioral metrics
+winstay_col <- rev_col
+update_col  <- deval_col
+withold_col <- deval_col
+
+# helper function to plot bivariate correlations
+plot_param_perf <- function(data, param_var, param_label, group_label) {
+  # data: params_behav_df
+  # param_var: parameter of interest
+  # param_label: string label of parameter of interest
+  # group_label: "TC" or "PTSD"
+  
+  deval_metric <- if (group_label == "PTSD") "withhold_deval" else "update_deval"
+  deval_label  <- if (group_label == "PTSD") "Deval Withhold" else "Deval Update"
+  
+  plot_df <- data %>%
+    filter(Group == group_label) %>%
+    select(Subject, all_of(param_var), win_stay_rev, all_of(deval_metric)) %>%
+    pivot_longer(cols = c(win_stay_rev, all_of(deval_metric)),
+                 names_to = "metric", values_to = "performance") %>%
+    mutate(metric = factor(metric,
+                           levels = c("win_stay_rev", deval_metric),
+                           labels = c("Win-Stay",     deval_label)))
+  # Compute stats per metric
+  stats_df <- plot_df %>%
+    group_by(metric) %>%
+    summarise({
+      ct <- cor.test(.data[[param_var]], performance, use = "complete.obs")
+      data.frame(
+        r = round(ct$estimate, 2),
+        p = round(ct$p.value, 3)
+      )
+    }, .groups = "drop") %>%
+    mutate(label = paste0("r = ", r, ", p = ", p),
+           x = Inf,
+           y     = case_when(metric == "Win-Stay"     ~ Inf,
+                             metric == deval_label     ~ -Inf),
+           vjust = case_when(metric == "Win-Stay"     ~ 1.5,
+                             metric == deval_label     ~ -0.5))
+  
+  ggplot(plot_df, aes(x = .data[[param_var]], y = performance, color = metric, fill = metric, linetype=metric)) +
+    geom_point(alpha = 0.6, size = 1,
+               shape = ifelse(group_label == "PTSD", 16, 21)) +
+    geom_smooth(method = "lm", se = TRUE, alpha = 0.2, size = 0.5) +
+    geom_text(data = stats_df,
+              aes(x = x, y = y, label = label, vjust = vjust, color = metric),
+              hjust = 1.05, size = 2.2, inherit.aes = FALSE) +
+    scale_color_manual(values = c("Win-Stay" = winstay_col, "Deval Update" = update_col, 
+                                  "Deval Withhold" = deval_col)) +
+    scale_fill_manual(values  = c("Win-Stay" = winstay_col, "Deval Update" = update_col, 
+                                  "Deval Withhold" = deval_col)) +
+    scale_linetype_manual(values = c("Win-Stay"       = "solid",
+                                     "Deval Update"   = "solid",
+                                     "Deval Withhold" = "dashed")) +
+    scale_y_continuous(labels = scales::percent) +
+    coord_cartesian(ylim = c(0, 1)) +
+    theme_classic(base_size = axes_tick_size) +
+    theme(axis.title = element_text(size = axes_labels_size),
+          axis.text  = element_text(size = axes_tick_size),
+          legend.position = "none") +
+    labs(x = param_label, y = "Performance",
+         color = "Metric", fill = "Metric", linetype = "Metric",
+         title = paste(group_label, "—", param_label))
+}
+
+# Generate figures
+fig4C_ptsd_awin <- plot_param_perf(params_behav_df, "A_win", "α win", "PTSD")
+fig4C_tc_awin <- plot_param_perf(params_behav_df, "A_win", "α win", "TC")
+fig4C_ptsd_beta <- plot_param_perf(params_behav_df, "tau",   "β (tau)", "PTSD")
+fig4C_tc_beta <- plot_param_perf(params_behav_df, "tau",   "β (tau)", "TC")
+fig4C_ptsd_p <- plot_param_perf(params_behav_df, "p",   "p", "PTSD")
+fig4C_tc_p <- plot_param_perf(params_behav_df, "p",   "p", "TC")
+
+print(fig4C_ptsd_awin)
+print(fig4C_tc_awin)
+print(fig4C_ptsd_beta)
+print(fig4C_tc_beta)
+print(fig4C_ptsd_p)
+print(fig4C_tc_p)
+
+getwd()
+# save
+ggsave("fig4C_ptsd_awin.pdf",fig4C_ptsd_awin, width = 2.75, height = 3.4, units = "cm")
+ggsave("fig4C_tc_awin.pdf",fig4C_tc_awin, width = 2.75, height = 3.4, units = "cm")
+ggsave("fig4C_ptsd_beta.pdf",fig4C_ptsd_beta, width = 2.75, height = 3.4, units = "cm")
+ggsave("fig4C_tc_beta.pdf",fig4C_tc_beta, width = 2.75, height = 3.4, units = "cm")
+ggsave("fig4C_ptsd_p.pdf",fig4C_ptsd_p, width = 2.75, height = 3.4, units = "cm")
+ggsave("fig4C_tc_p.pdf",fig4C_tc_p, width = 2.75, height = 3.4, units = "cm")
+
+```
+
+# Nonfig: Report stats for 4D: Parameter x Behavior correlations stats reporting
+```{r}
+get_param_behavior_cors <- function(grp, param_var) {
+  
+  behavior_vars <- c("opt_resp_learn", "opt_resp_rev", 
+                     "win_stay_learn", "win_stay_rev")
+  
+  df <- behav_vars_summary_join %>%
+    filter(Group == grp) %>%
+    select(all_of(c(param_var, behavior_vars))) %>%
+    as.matrix()
+  
+  cor_out <- Hmisc::rcorr(df)
+  n       <- sum(!is.na(df[, param_var]))
+  df_val  <- n - 2
+  
+  data.frame(
+    variable = behavior_vars,
+    r        = round(cor_out$r[param_var, behavior_vars], 3),
+    p        = round(cor_out$P[param_var, behavior_vars], 3),
+    df       = df_val
+  )
+}
+
+param_vars <- c("A_win", "tau", "p")
+results <- lapply(param_vars, function(par) {
+  ptsd <- get_param_behavior_cors("PTSD", par) %>% mutate(param = par, Group = "PTSD")
+  tc   <- get_param_behavior_cors("TC",   par) %>% mutate(param = par, Group = "TC")
+  rbind(ptsd, tc)
+})
+results_df <- do.call(rbind, results)
+print(results_df)
+```
+
+# Supp 4D: Learning x model params
+```{r}
+# group params
+nPTSD = 34 # 34 (learn) # 34 (Deval)
+nTC = 32   # 34 (learn) # 32 (Deval)
+nTot = nPTSD + nTC
+
+# LEARN
+mtx_df <- left_join(df_subject_means_all, behav_vars_summary, by = "Subject") %>%
+  dplyr::rename(beta = tau) %>%
+  dplyr::rename(opt = opt_resp_learn) %>%
+  dplyr::rename(winstay = win_stay_learn) %>%
+  dplyr::rename(switch = switch_rate_learn) %>%
+  mutate(group = ifelse(group == "PTSD", 1, 0)) %>%
+  select(group,A_win,beta,p,opt,winstay,switch)
+mtx <- mtx_df %>% as.matrix()
+
+# Compute correlations
+corval_grp0 = rcorr(mtx[mtx[,1]==0,])
+corval_grp1 = rcorr(mtx[mtx[,1]==1,])
+
+corval_grp0_melt <- melt(corval_grp0$r) %>%
+  filter(!(X1=="Group") & X2 %in% c("A_win", "beta", "p") & !(X1 %in% c("A_win", "beta", "p"))) %>%
+  mutate(Group = "TC")
+pval_grp0_melt <- melt(corval_grp0$P) %>%
+  filter(!(X1=="Group") & X2 %in% c("A_win", "beta", "p") & !(X1 %in% c("A_win", "beta", "p"))) %>%
+  mutate(Group = "TC") %>%
+  dplyr::rename(p = value)
+corval_grp0_melt <- merge(corval_grp0_melt, pval_grp0_melt, by = c("Group", "X1", "X2"))
+
+corval_grp1_melt <- melt(corval_grp1$r) %>%
+  filter(!(X1=="Group") & X2 %in% c("A_win", "beta", "p") & !(X1 %in% c("A_win", "beta", "p"))) %>%
+  mutate(Group = "PTSD")
+pval_grp1_melt <- melt(corval_grp1$P) %>%
+  filter(!(X1=="Group") & X2 %in% c("A_win", "beta", "p") & !(X1 %in% c("A_win", "beta", "p"))) %>%
+  mutate(Group = "PTSD") %>%
+  dplyr::rename(p = value)
+corval_grp1_melt <- merge(corval_grp1_melt, pval_grp1_melt, by = c("Group", "X1", "X2"))
+
+corval_bothgrps <- rbind(corval_grp0_melt, corval_grp1_melt) %>%
+  mutate(sigWithin = ifelse(p < .05, '*', ifelse(p < .01, '**', ifelse(p < .001, '***', ''))))
+
+# compare groups
+## manual version - same output as cocor package
+compare_corr = function(r1, r2, n1, n2) {
+  z1 = (log(1+r1) - log(1-r1))/2
+  z2 = (log(1+r2) - log(1-r2))/2
+  sigma <- sqrt(1/(n1-3) + 1/(n2-3))
+  z = (z1-z2)/sigma
+  p = 2*(1-pnorm(abs(z)))
+  df = data.frame(z = z, p = p)
+  return(df)
+}
+
+corval_bothgrps$z.diff = NA
+corval_bothgrps$p.diff = NA
+
+for (c in c(1:dim(corval_grp1_melt)[1])) {
+  compset = intersect(which(corval_bothgrps[,2]==corval_bothgrps[c,2]),
+                      which(corval_bothgrps[,3]==corval_bothgrps[c,3]))
+  r0 = corval_bothgrps[intersect(compset, which(corval_bothgrps$Group=='TC')),]$value %>% as.numeric()                    
+  r1 = corval_bothgrps[intersect(compset, which(corval_bothgrps$Group=='PTSD')),]$value %>% as.numeric()                    
+  compval = compare_corr(r0, r1, nTC, nPTSD)
+  corval_bothgrps[compset,]$z.diff = compval$z
+  corval_bothgrps[compset,]$p.diff = compval$p
+}
+
+corval_bothgrps <- corval_bothgrps %>%
+  mutate(sigBetween = ifelse(p.diff < .05, '*', ifelse(p.diff < .01, '**', ifelse(p.diff < .001, '***', ''))))
+
+pheat <- ggplot(corval_bothgrps %>% 
+       filter(!(X1 %in% c("group"))),
+       aes(x = X1, y = X2, fill = value)) +
+  geom_tile() +
+  scale_fill_gradient2(low = "blue", mid = "white", high = "red", limits = c(-1,1)) +
+  geom_text(aes(label = sigWithin), nudge_y = .1, size = 4) +
+  geom_text(aes(label = round(value,2), hjust = "middle", vjust = "middle"), size = 2) +
+  facet_grid(Group~.) + 
+  guides(fill = "none") +
+  labs(x = "", y = "") +
+  theme_minimal()
+pheat
+```
+
