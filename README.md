@@ -47,17 +47,17 @@ Krystian B. Loetscher, D.T. Nguyen, Sanghoon Kang, John H. Krystal, Stephanie M.
  - dplyr (1.0.10)
 
 ## 3. Special hardware requirements
- none
+ - none
 
 ## 4. Installation guide
- Install R (4.2.1) from The Comprehensive R Archive Network (CRAN)
- Install R pacakges using install.packages() : (e.g. install.packages("lme4")
- Install rstan from CRAN (install.packages("rstan"))
- Clone this repository
+ - Install R (4.2.1) from The Comprehensive R Archive Network (CRAN)
+ - Install R pacakges using install.packages() : (e.g. install.packages("lme4")
+ - Install rstan from CRAN (install.packages("rstan"))
+ - Clone this repository
 
 # 5. DEMO
- To replicate analyses, run 'behavioral_analysis.Rmd' or 'model_analysis.Rmd' from the project root.
- Analysis outputs will appear inline in the R script
- Expected run time: No more than 5 minutes for each of the analyses scripts
+ - To replicate analyses, run 'behavioral_analysis.Rmd' or 'model_analysis.Rmd' from the project root.
+ - Analysis outputs will appear inline in the R script
+ - Expected run time: No more than 5 minutes for each of the analyses scripts
 
 
