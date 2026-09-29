@@ -1,6 +1,6 @@
 ## Code for: Striatal habit system drives behavioral rigidity in PTSD (under review)
 Krystian B. Loetscher, D.T. Nguyen, Sanghoon Kang, John H. Krystal, Stephanie M. Groman & Elizabeth V. Goldfarb*
-    * corresponding author: Elizabeth Goldfarb
+* corresponding author: Elizabeth Goldfarb
 
 ## 1. Repo contents
 ```
@@ -21,9 +21,9 @@ Krystian B. Loetscher, D.T. Nguyen, Sanghoon Kang, John H. Krystal, Stephanie M.
  'model_analysis.html'                     : knitted file containing statistics reported for modeling analyses
 ```
 ## 2. System requirements, software versions, and dependencies
- MacOS (13.1 Ventura)
- Stan (2.21.7)          : Install time < 5 minutes
- R (4.2.1)              : Install time < 10 minutes, including dependencies
+ - MacOS (13.1 Ventura)
+ - Stan (2.21.7)          : Install time < 5 minutes
+ - R (4.2.1)              : Install time < 10 minutes, including dependencies
  - lme4 (1.1.30)
  - lmerTest (3.1.3)
  - emmeans (1.8.2)
