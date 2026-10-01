@@ -107,7 +107,7 @@ p_tcval <- sr_merge.recode_opt %>%
   group_by(Phase, Subject, Group, Block, CueInfo) %>%
   summarise(plot_response = mean(Opt_resp, na.rm = TRUE), .groups = "drop") %>%
   ggplot(aes(x = Block, y = plot_response, color = CueInfo, fill = CueInfo)) + 
-  stat_summary(fun = mean, geom = "point", alpha = 1, size = 1) +
+  stat_summary(fun = mean, geom = "point", alpha = 1, size = 1, shape = 21, stroke = 0.6, fill = "white") +
   stat_summary(data = ~ filter(., Phase %in% c(1, 2)), 
              fun.data = mean_se, geom = "ribbon", alpha = .4, color = NA, aes(group = CueInfo)) +
   stat_summary(data = ~ filter(., Phase == 3), 
@@ -155,7 +155,7 @@ p_ptsdval <- sr_merge.recode_opt %>%
   labs(x = "Block",y = "Optimal response", title = "PTSD")
 
 print(p_tcval)   #ggsave("fig1_tc_validation.pdf",p_tcval, width = 8, height = 5, units = "cm")
-print(p_ptsdval) #ggsave("fig1_ptsd_validation.pdf",p_ptsdval, width = 10.25, height = 5, units = "cm")
+print(p_ptsdval) ggsave("fig1_ptsd_validation.pdf",p_ptsdval, width = 10.25, height = 5, units = "cm")
 
 # ---- Stats ---- #
 groups_df <- sr_merge.recode_opt %>%
@@ -226,15 +226,20 @@ consump_deval <- consump_df %>%
 
 deval_consump_model_lmer <- lmerTest::lmer(Chosen_Proportion ~ Group * Outcome + (1 | Subject), data = consump_deval)
 deval_consump_model_lme <- lme(Chosen_Proportion ~ Group * Outcome, random = ~1|Subject,data = consump_deval)
-anova(deval_consump_model_lme)
+anova(deval_consump_model_lmer)
 emmeans(deval_consump_model_lmer, pairwise ~ Outcome | Group, adjust = "fdr")
 
-# Or, do a paired t-test
+# TC: paired t-test
 tc_deval <- consump_deval %>%
   filter(Group == "TC") %>%
   pivot_wider(id_cols = Subject, names_from = Outcome, values_from = Chosen_Proportion)
-
 t.test(tc_deval$Valued, tc_deval$Devalued, paired = TRUE)
+
+# PTSD: paired t-test
+ptsd_deval <- consump_deval %>%
+  filter(Group == "PTSD") %>%
+  pivot_wider(id_cols = Subject, names_from = Outcome, values_from = Chosen_Proportion)
+t.test(ptsd_deval$Valued, ptsd_deval$Devalued, paired = TRUE)
 
 # Are deval and val equivalently valued *before* devaluation? (control)
 consump_baseline <- consump_df %>%
@@ -655,6 +660,7 @@ rev_block_model_lmer <- lmerTest::lmer(orig_response ~ Group * CueInfo * CuePres
 
 anova(rev_block_model_lmer)
 emtrends(rev_block_model_lmer, pairwise ~ Group | CueInfo, var = "CuePres")
+emmeans(rev_block_model_lmer, pairwise ~ Group | CueInfo)
 
 # Age?
 input_model_data_block_age <- sr_merge.recode_opt %>%
@@ -782,30 +788,18 @@ deval_model <- lmerTest::lmer(orig_response ~ Group * CueInfo + (1 | Subject),
 anova(deval_model)
 emmeans(deval_model, pairwise ~ CueInfo | Group, adjust = "fdr")
 
-# Deval vs no-change (using t.test)
+# TC: Deval vs no-change (using t.test)
 tc_deval_sr <- deval_data %>%
   filter(Group == "TC") %>%
   pivot_wider(id_cols = Subject, names_from = CueInfo, values_from = orig_response)
-
 t.test(tc_deval_sr$no_change, tc_deval_sr$deval, paired = TRUE)
 
-# vs chance
-deval_chance <- deval_data %>%
-  filter(CueInfo == "deval") %>%
-  group_by(Group) %>%
-  summarise(
-    n       = n(),
-    mean    = mean(orig_response),
-    sd      = sd(orig_response),
-    t_stat  = t.test(orig_response, mu = 0.5)$statistic,
-    df_t    = t.test(orig_response, mu = 0.5)$parameter,
-    p_val   = t.test(orig_response, mu = 0.5)$p.value,
-    ci_low  = t.test(orig_response, mu = 0.5)$conf.int[1],
-    ci_high = t.test(orig_response, mu = 0.5)$conf.int[2],
-    .groups = "drop"
-  )
+# PTSD: Deval vs no-change (using t.test)
+ptsd_deval_sr <- deval_data %>%
+  filter(Group == "PTSD") %>%
+  pivot_wider(id_cols = Subject, names_from = CueInfo, values_from = orig_response)
+t.test(ptsd_deval_sr$no_change, ptsd_deval_sr$deval, paired = TRUE)
 
-print(deval_chance)
 #ggsave("fig2_block2_deval_NEWCOLOR.pdf", p_deval, width = 7, height = 5, units = "cm")
 ```
 
@@ -837,17 +831,29 @@ p_deval_pcl_only_PTSD <- plot_data %>%
 print(p_deval_pcl_only_PTSD) #ggsave("fig2C_DevalxPCL.pdf", p_deval_pcl_only_PTSD, width = 8, height = 5, units = "cm")
 
 # ----- Stats ----- #
-plot_data_stats <- sr_merge.recode_opt %>% 
+# PTSD
+plot_data_stats_ptsd <- sr_merge.recode_opt %>% 
   filter(Study == study_include, Phase == 3, Block == 2, Group == "PTSD", 
          CueInfo %in% c("no_change","deval"),!Subject %in% c("7015", "7021")) %>%
   group_by(Subject, Group, CueInfo) %>%
   summarise(avg_orig_response = mean(orig_response, na.rm = TRUE), .groups = "drop") %>%
   left_join(self_report %>% select(Subject, PCL_score), by = "Subject")
 
-deval_pcl <- lmerTest::lmer(avg_orig_response ~ PCL_score * CueInfo + (1 | Subject), data = plot_data_stats)
-deval_pcl <- lme(avg_orig_response ~ PCL_score * CueInfo, random = ~1 | Subject, data = plot_data_stats)
-anova(deval_pcl)
-test(emtrends(deval_pcl, var = "PCL_score", pairwise ~ CueInfo))
+deval_pcl_ptsd <- lmerTest::lmer(avg_orig_response ~ PCL_score * CueInfo + (1 | Subject), data = plot_data_stats_ptsd)
+#deval_pcl <- lme(avg_orig_response ~ PCL_score * CueInfo, random = ~1 | Subject, data = plot_data_stats)
+anova(deval_pcl_ptsd)
+test(emtrends(deval_pcl_ptsd, var = "PCL_score", pairwise ~ CueInfo))
+
+# TC
+plot_data_stats_tc <- sr_merge.recode_opt %>% 
+  filter(Study == study_include, Phase == 3, Block == 2, Group == "TC", 
+         CueInfo %in% c("no_change","deval"),!Subject %in% c("7015", "7021")) %>%
+  group_by(Subject, Group, CueInfo) %>%
+  summarise(avg_orig_response = mean(orig_response, na.rm = TRUE), .groups = "drop") %>%
+  left_join(self_report %>% select(Subject, PCL_score), by = "Subject")
+
+deval_pcl_tc <- lmerTest::lmer(avg_orig_response ~ PCL_score * CueInfo + (1 | Subject), data = plot_data_stats_tc)
+anova(deval_pcl_tc)
 
 # age?
 plot_data_stats_age <- sr_merge.recode_opt %>% 
@@ -1140,13 +1146,13 @@ betas_putam <- betas %>%
   filter(run %in% c("learn_1","learn_2"))
 
 model_betas_putam_lmer <- lmerTest::lmer(mean_beta ~  Group + run + pe + (1 | Subject), data = betas_putam)
-model_betas_putam_lme <- lme(mean_beta ~  Group * run * pe, random=~1|Subject, data = betas_putam)
+#model_betas_putam_lme <- lme(mean_beta ~  Group * run * pe, random=~1|Subject, data = betas_putam)
 
 anova(model_betas_putam_lmer)
 emmeans(model_betas_putam_lmer, pairwise ~ Group)
 emmeans(model_betas_putam_lmer, pairwise ~ pe)
-emmeans(model_betas_putam_lme, pairwise ~ run)
-emmeans(model_betas_putam_lme, pairwise ~ run|Group)
+#emmeans(model_betas_putam_lme, pairwise ~ run)
+#emmeans(model_betas_putam_lme, pairwise ~ run|Group)
 
 # ONLY PTSD
 betas_putam_ptsd <- betas %>%
@@ -1157,7 +1163,7 @@ model_betas_putam_lmer_ptsd <- lmerTest::lmer(mean_beta ~  run + pe + (1 | Subje
 model_betas_putam_lme_ptsd <- lme(mean_beta ~  run + pe , random=~1|Subject, data = betas_putam_ptsd)
 
 anova(model_betas_putam_lmer_ptsd)
-anova(model_betas_putam_lme_ptsd)
+#anova(model_betas_putam_lme_ptsd)
 
 # ONLY TC
 betas_putam_tc <- betas %>%
@@ -1166,7 +1172,9 @@ betas_putam_tc <- betas %>%
   filter(run %in% c("learn_1","learn_2"))
 model_betas_putam_lmer_tc <- lmerTest::lmer(mean_beta ~  run + pe + (1 | Subject), data = betas_putam_tc)
 model_betas_putam_lme_tc <- lme(mean_beta ~  run + pe , random=~1|Subject, data = betas_putam_tc)
-anova(model_betas_putam_lme_tc)
+
+anova(model_betas_putam_lmer_tc)
+#anova(model_betas_putam_lme_tc)
 ```
 
 # Fig 3A new: opt v nonopt by group
@@ -1439,12 +1447,12 @@ print(fig4C_tc_p)
 
 getwd()
 # save
-ggsave("fig4C_ptsd_awin.pdf",fig4C_ptsd_awin, width = 2.75, height = 3.4, units = "cm")
-ggsave("fig4C_tc_awin.pdf",fig4C_tc_awin, width = 2.75, height = 3.4, units = "cm")
-ggsave("fig4C_ptsd_beta.pdf",fig4C_ptsd_beta, width = 2.75, height = 3.4, units = "cm")
-ggsave("fig4C_tc_beta.pdf",fig4C_tc_beta, width = 2.75, height = 3.4, units = "cm")
-ggsave("fig4C_ptsd_p.pdf",fig4C_ptsd_p, width = 2.75, height = 3.4, units = "cm")
-ggsave("fig4C_tc_p.pdf",fig4C_tc_p, width = 2.75, height = 3.4, units = "cm")
+#ggsave("fig4C_ptsd_awin.pdf",fig4C_ptsd_awin, width = 2.75, height = 3.4, units = "cm")
+#ggsave("fig4C_tc_awin.pdf",fig4C_tc_awin, width = 2.75, height = 3.4, units = "cm")
+#ggsave("fig4C_ptsd_beta.pdf",fig4C_ptsd_beta, width = 2.75, height = 3.4, units = "cm")
+#ggsave("fig4C_tc_beta.pdf",fig4C_tc_beta, width = 2.75, height = 3.4, units = "cm")
+#ggsave("fig4C_ptsd_p.pdf",fig4C_ptsd_p, width = 2.75, height = 3.4, units = "cm")
+#ggsave("fig4C_tc_p.pdf",fig4C_tc_p, width = 2.75, height = 3.4, units = "cm")
 
 ```
 
@@ -1565,4 +1573,21 @@ pheat <- ggplot(corval_bothgrps %>%
   theme_minimal()
 pheat
 ```
+
+```{r}
+corval_bothgrps %>%
+  filter(!(X1 %in% c("group"))) %>%
+  mutate(
+    df_within = ifelse(Group == "TC", nTC - 2, nPTSD - 2),
+    t_within  = value * sqrt(df_within) / sqrt(1 - value^2)
+  ) %>%
+  select(Group, param = X2, behav = X1, r = value, t = t_within, 
+         df = df_within, p = p, z.diff, p.diff) %>%
+  mutate(across(c(r, t, z.diff), ~round(., 3)),
+         across(c(p, p.diff), ~round(., 4))) %>%
+  arrange(param, behav, Group) %>%
+  as_tibble() %>% 
+  print(n = Inf)
+```
+
 
