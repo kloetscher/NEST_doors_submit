@@ -54,7 +54,10 @@ conting_merge <- read.csv(file.path(processed_behav_dir, "NEST_behavioral_data_c
 
 # Self report data
 self_report <- read.csv(file.path(processed_self_report_dir, "NEST_self_report_data_with_scanners_processed.csv"))
-nest_scid_ss <- read.csv(file.path(processed_self_report_dir, "NEST_SCID_SS_data_filt.csv"))
+nest_scid_ss <- read.csv(file.path(processed_self_report_dir, "NEST_SCID_substances_filt.csv"))
+nest_scid_covar <- read.csv(file.path(processed_self_report_dir, "NEST_scid_covariates.csv"))
+nest_scid_ptsd_summary <- read.csv(file.path(processed_self_report_dir, "NEST_scid_ptsd_summary.csv"))
+intake_scan_interval <- read.csv(file.path(processed_self_report_dir, "intake_to_scan_days.csv"))
 
 # Neural data (betas)
 betas <- read.csv(file.path(processed_betas_dir, "mean_betas_long_processed.csv"))
@@ -441,7 +444,9 @@ behav_vars_summary_join <- behav_vars_summary %>%
               filter(pe == 1, roi == "putam", run %in% c("learn_1", "learn_2")) %>%
               select(Subject, run, mean_beta) %>%
               pivot_wider(names_from = run, values_from = mean_beta,
-                          names_prefix = "beta_"), by = "Subject")
+                          names_prefix = "beta_"), by = "Subject") %>%
+  left_join(nest_scid_covar, by = "Subject") %>%
+  left_join(nest_scid_ptsd_summary, by = "Subject")
 ```
 
 ## Fig 2A: Learning; PTSD vs TC over CuePres & Slopes ##
@@ -1135,6 +1140,1040 @@ print(p_clE_beta)
 #ggsave("Supp5A_pclE_awin.pdf", p_clE_awin, width = 5, height = 5, units = "cm")
 #ggsave("Supp5A_pcl_beta.pdf", p_clE_beta, width = 5, height = 5, units = "cm")
 ```
+
+## RR stats with more covariates (AUD, SUD, Antidep use, Education, Slopes, Sex, Audit ) 
+```{r}
+input_model_data_cuePres <- sr_merge.recode_opt %>%
+  filter(Study == study_include & Phase == 1) %>%
+  group_by(Group,Subject,CuePres) %>%
+  summarise(orig_response = mean(orig_response, na.rm=T))
+
+learn_cuePres_model_lmer <- lmerTest::lmer(orig_response ~ Group * CuePres + (1 | Subject), data = input_model_data_cuePres)
+learn_cuePres_model_lme <- lme(orig_response ~ Group * CuePres, random = ~1|Subject, data = input_model_data_cuePres)
+
+anova(learn_cuePres_model_lmer)
+emtrends(learn_cuePres_model_lmer, pairwise ~ Group, var = "CuePres")
+```
+
+## RR random slopes in lmes (1.7, 3.4)
+```{r}
+# 1) Learning: differences in learning curves with covariates
+# get learning input data for model
+input_model_data_cuePres <- sr_merge.recode_opt %>%
+  filter(Study == study_include & Phase == 1) %>%
+  group_by(Group,Subject,CuePres) %>%
+  summarise(orig_response = mean(orig_response, na.rm=T))
+
+# rescale cuepres so model converges (fails to converge without scaling)
+  # note: boosting iterations yields same statistical results
+input_model_data_cuePres_rescaled <- input_model_data_cuePres
+input_model_data_cuePres_rescaled$CuePres_s <- as.numeric(scale(input_model_data_cuePres_rescaled$CuePres))
+learn_cuePres_model_lmer_covar <- lmerTest::lmer(orig_response ~ Group * CuePres_s + (1 + CuePres_s | Subject),
+                                                 data = input_model_data_cuePres_rescaled)
+anova(learn_cuePres_model_lmer_covar)
+
+
+# 2) Reversal: differences updating
+input_model_data_block_rev <- sr_merge.recode_opt %>%
+  dplyr::filter(Study == study_include) %>%
+  dplyr::filter(Phase == 2) %>%
+  dplyr::filter(CueInfo %in% c("no_change","rev")) %>%
+  group_by(Phase, Subject, Group, CueInfo, CuePres) %>%
+  summarise(orig_response = mean(orig_response, na.rm=T))
+
+input_model_data_block_recscale <- input_model_data_block_rev
+input_model_data_block_recscale$CuePres_s <- as.numeric(scale(input_model_data_block_recscale$CuePres))
+
+# rev lme model version 1
+rev_block_model_lmer_covar_1 <- lmerTest::lmer(orig_response ~ Group * CueInfo * CuePres_s + (1 + CuePres_s | Subject),
+  data = input_model_data_block_recscale)
+anova(rev_block_model_lmer_covar_1)
+
+# rev lme model version 2
+rev_block_model_lmer_covar_2 <- lmerTest::lmer(orig_response ~ Group * CueInfo * CuePres_s + (1 + CueInfo * CuePres_s | Subject),
+  data = input_model_data_block_recscale)
+anova(rev_block_model_lmer_covar_2)
+
+#anova_stats(lmer(orig_response ~ Group * CueInfo * CuePres_s + (1 + CueInfo * CuePres_s | Subject),data = input_model_data_block_recscale))
+
+isSingular(rev_block_model_lmer_covar_2)
+VarCorr(rev_block_model_lmer_covar_2)
+
+# rev lme model version 3
+rev_block_model_lmer_covar_3 <- lmerTest::lmer(orig_response ~ Group * CueInfo * CuePres_s + (1 + CueInfo + CuePres_s | Subject),
+  data = input_model_data_block_recscale)
+anova(rev_block_model_lmer_covar_3)
+
+# + vs * in the random part: does the interaction slope improve fit?
+anova(rev_block_model_lmer_covar_3, rev_block_model_lmer_covar_2)
+
+```
+
+## RR (1.2) learn covar in rev lme
+```{r}
+# ---- Learning slope as covariate ---- #
+# Per-subject learning slope (Phase 1)
+learn_slope_dat <- sr_merge.recode_opt %>%
+  dplyr::filter(Phase == 1 & Study == study_include) %>%
+  group_by(Subject, CuePres) %>%
+  summarise(Opt_resp = mean(Opt_resp, na.rm = TRUE), .groups = "drop") %>%
+  group_by(Subject) %>%
+  summarise(learn_slope = coef(lm(Opt_resp ~ CuePres))[2], .groups = "drop")
+
+# Join to reversal model data
+input_model_data_block_rev <- sr_merge.recode_opt %>%
+  dplyr::filter(Study == study_include) %>%
+  dplyr::filter(Phase == 2) %>%
+  dplyr::filter(CueInfo %in% c("no_change","rev")) %>%
+  group_by(Phase, Subject, Group, CueInfo, CuePres) %>%
+  summarise(orig_response = mean(orig_response, na.rm=T))
+
+input_model_data_block_rev_slope <- input_model_data_block_rev %>%
+  ungroup() %>%
+  left_join(learn_slope_dat, by = "Subject")
+
+# Check that no subject is missing a learning slope
+sum(is.na(input_model_data_block_rev_slope$learn_slope))
+
+# rescale cuepres
+input_model_data_block_rev_slope$CuePres_s <- as.numeric(scale(input_model_data_block_rev_slope$CuePres))
+
+# Model 1: learning slope as a main-effect covariate
+rev_block_model_learn_lmer <- lmerTest::lmer(
+  orig_response ~ Group * CueInfo * CuePres_s + learn_slope + (1 | Subject),
+  data = input_model_data_block_rev_slope)
+anova(rev_block_model_learn_lmer)
+
+# Model 2: learning slope as a main-effect covariate, with random slopes
+rev_block_model_learn_lmer_slopes <- lmerTest::lmer(
+  orig_response ~ Group * CueInfo * CuePres_s + learn_slope + (1 + CuePres_s | Subject),
+  data = input_model_data_block_rev_slope)
+anova(rev_block_model_learn_lmer_slopes)
+
+###################################################################
+
+# ---- Overall learning performance as covariate ---- #
+learn_overall_cov <- sr_merge.recode_opt %>%
+  dplyr::filter(Study == study_include, Phase == 1) %>%
+  dplyr::filter(Block > 5) %>%
+  group_by(Subject) %>%
+  summarise(learn_opt = mean(orig_response, na.rm = TRUE), .groups = "drop")
+
+input_model_data_block_rev_learnopt <- input_model_data_block_rev %>%
+  ungroup() %>%
+  left_join(learn_overall_cov, by = "Subject")
+
+# Check that no subject is missing the covariate
+sum(is.na(input_model_data_block_rev_learnopt$learn_opt))
+
+# rescale cuepres
+input_model_data_block_rev_learnopt$CuePres_s <- as.numeric(scale(input_model_data_block_rev_learnopt$CuePres))
+
+# Model 1: opt resp as main-effect covariate
+rev_block_model_learnopt_lmer <- lmerTest::lmer(
+  orig_response ~ Group * CueInfo * CuePres_s + learn_opt + (1 | Subject),
+  data = input_model_data_block_rev_learnopt)
+anova(rev_block_model_learnopt_lmer)
+
+# Model 2: opt respe as a main-effect covariate, with random slopes
+rev_block_model_learnopt_lmer_slopes <- lmerTest::lmer(
+  orig_response ~ Group * CueInfo * CuePres_s + learn_opt + (1 + CuePres_s | Subject),
+  data = input_model_data_block_rev_learnopt)
+anova(rev_block_model_learnopt_lmer_slopes)
+
+emtrends(rev_block_model_learnopt_lmer_slopes, pairwise ~ Group | CueInfo, var = "CuePres_s")
+emmeans(rev_block_model_learnopt_lmer_slopes, pairwise ~ Group | CueInfo)
+
+```
+
+## RR (1.2) learn covar in deval lme
+```{r}
+learn_slope_dat <- learn_slope_dat %>%
+  mutate(learn_slope_s = as.numeric(scale(learn_slope)))
+
+# PTSD
+plot_data_stats_ptsd_ls <- sr_merge.recode_opt %>% 
+  filter(Study == study_include, Phase == 3, Block == 2, Group == "PTSD", 
+         CueInfo %in% c("no_change","deval"),!Subject %in% c("7015", "7021")) %>%
+  group_by(Subject, Group, CueInfo) %>%
+  summarise(avg_orig_response = mean(orig_response, na.rm = TRUE), .groups = "drop") %>%
+  left_join(self_report %>% select(Subject, PCL_score), by = "Subject") %>%
+  left_join(learn_slope_dat %>% select(Subject, learn_slope_s), by = "Subject")
+
+deval_pcl_ls_ptsd <- lmerTest::lmer(avg_orig_response ~ PCL_score * CueInfo + learn_slope_s + (1 | Subject),
+                                    data = plot_data_stats_ptsd_ls)
+anova(deval_pcl_ls_ptsd)
+test(emtrends(deval_pcl_ls_ptsd, var = "PCL_score", pairwise ~ CueInfo))
+
+# TC
+plot_data_stats_tc_ls <- sr_merge.recode_opt %>% 
+  filter(Study == study_include, Phase == 3, Block == 2, Group == "TC", 
+         CueInfo %in% c("no_change","deval"),!Subject %in% c("7015", "7021")) %>%
+  group_by(Subject, Group, CueInfo) %>%
+  summarise(avg_orig_response = mean(orig_response, na.rm = TRUE), .groups = "drop") %>%
+  left_join(self_report %>% select(Subject, PCL_score), by = "Subject") %>%
+  left_join(learn_slope_dat %>% select(Subject, learn_slope_s), by = "Subject")
+
+deval_pcl_ls_tc <- lmerTest::lmer(avg_orig_response ~ PCL_score * CueInfo + learn_slope_s + (1 | Subject),
+                                  data = plot_data_stats_tc_ls)
+anova(deval_pcl_ls_tc)
+```
+
+## RR (1.4) PCL x Group tests
+```{r}
+# Learning
+pcl_group_model <- lm(opt_resp_learn ~ PCL_score * Group, data = behav_vars_summary_join)
+anova(pcl_group_model)
+
+# Devaluation
+plot_data_stats_all <- sr_merge.recode_opt %>% 
+  filter(Study == study_include, Phase == 3, Block == 2,
+         CueInfo %in% c("no_change","deval"),!Subject %in% c("7015", "7021")) %>%
+  group_by(Subject, Group, CueInfo) %>%
+  summarise(avg_orig_response = mean(orig_response, na.rm = TRUE), .groups = "drop") %>%
+  left_join(self_report %>% select(Subject, PCL_score), by = "Subject")
+
+deval_pcl_group_model <- lmerTest::lmer(avg_orig_response ~ PCL_score * CueInfo * Group + (1 | Subject),
+                                        data = plot_data_stats_all)
+anova(deval_pcl_group_model)
+emtrends(deval_pcl_group_model, pairwise ~ Group | CueInfo, var = "PCL_score")
+
+# A_win
+awin_pcl_group_model <- lm(A_win ~ PCL_score * Group, data = behav_vars_summary_join)
+anova(awin_pcl_group_model)
+emtrends(awin_pcl_group_model, pairwise ~ Group, var = "PCL_score")
+```
+
+## RR (3.12) PCL interval checks 
+```{r}
+# Learning
+plot_df_gap <- behav_vars_summary_join %>%
+  filter(Group == "PTSD") %>%
+  select(Subject, PCL_score, opt_resp_learn) %>%
+  left_join(intake_scan_interval %>% select(Subject, days_intake_to_scan), by = "Subject") %>%
+  filter(!is.na(PCL_score), !is.na(opt_resp_learn), !is.na(days_intake_to_scan))
+
+learn_gap_cov <- lm(opt_resp_learn ~ PCL_score + days_intake_to_scan, data = plot_df_gap)
+summary(learn_gap_cov)
+
+# Deval
+plot_data_gap <- sr_merge.recode_opt %>% 
+  filter(Study == study_include, Phase == 3, Block == 2, Group == "PTSD",
+         CueInfo %in% c("no_change","deval"),!Subject %in% c("7015", "7021")) %>%
+  group_by(Subject, Group, CueInfo) %>%
+  summarise(avg_orig_response = mean(orig_response, na.rm = TRUE), .groups = "drop") %>%
+  left_join(self_report %>% select(Subject, PCL_score), by = "Subject") %>%
+  left_join(intake_scan_interval %>% select(Subject, days_intake_to_scan), by = "Subject")
+
+# 1) Covariate
+deval_gap_cov <- lmerTest::lmer(avg_orig_response ~ PCL_score * CueInfo + days_intake_to_scan * CueInfo + (1 | Subject),
+                                data = plot_data_gap)
+anova(deval_gap_cov)
+
+# A_win
+plot_df_awin_ptsd_covar <- behav_vars_summary_join %>%
+  filter(Group == "PTSD") %>%
+  select(Subject, A_win, PCL_score) %>%
+  filter(!is.na(A_win)) %>%
+  left_join(intake_scan_interval %>% select(Subject, days_intake_to_scan), by = "Subject")
+
+awin_pcl_covar_model <- lm(A_win ~ PCL_score + days_intake_to_scan, data = plot_df_awin_ptsd_covar)
+anova(awin_pcl_covar_model)
+
+```
+
+## RR Education
+```{r}
+# join demog data to behavioral data
+behav_demog_join_data <- behav_vars_summary_join %>%
+  left_join(self_report %>% select(Subject, demo_age, demo_cort, demo_beta, demo_antidep, demo_edu, AUDIT_score),
+            by = "Subject")
+
+# recode drug columns
+demo_covs <- self_report %>%
+  select(Subject, demo_age, demo_sex, demo_edu, demo_cort, demo_beta, demo_antidep, AUDIT_score) %>%
+  mutate(demo_cort    = ifelse(demo_cort    == "Yes", 1, ifelse(demo_cort    == "No", 0, NA)),
+         demo_beta    = ifelse(demo_beta    == "Yes", 1, ifelse(demo_beta    == "No", 0, NA)),
+         demo_antidep = ifelse(demo_antidep == "Yes", 1, ifelse(demo_antidep == "No", 0, NA)))
+wilcox.test(demo_edu ~ Group, data = behav_demog_join_data, exact = FALSE)
+
+
+
+```
+
+## RR many many covariates
+```{r}
+# ---- Learning ---- #
+# get learning input data for model
+input_model_data_cuePres <- sr_merge.recode_opt %>%
+  filter(Study == study_include & Phase == 1) %>%
+  group_by(Group,Subject,CuePres) %>%
+  summarise(orig_response = mean(orig_response, na.rm=T)) %>%
+  left_join(demo_covs, by = "Subject")
+
+# rescale cuepres so model converges (fails to converge without scaling)
+  # note: boosting iterations yields same statistical results
+input_model_data_cuePres_rescaled <- input_model_data_cuePres
+input_model_data_cuePres_rescaled$CuePres_s <- as.numeric(scale(input_model_data_cuePres_rescaled$CuePres))
+learn_cuePres_model_lmer_covar <- lmerTest::lmer(orig_response ~ Group * CuePres_s + 
+                                                   demo_age + demo_edu + demo_cort + demo_beta + demo_antidep 
+                                                   + AUDIT_score + (1 + CuePres_s | Subject),
+                                                   data = input_model_data_cuePres_rescaled)
+anova(learn_cuePres_model_lmer_covar)
+
+
+# ---- Reversal ---- #
+input_model_data_block_rev <- sr_merge.recode_opt %>%
+  dplyr::filter(Study == study_include) %>%
+  dplyr::filter(Phase == 2) %>%
+  dplyr::filter(CueInfo %in% c("no_change","rev")) %>%
+  group_by(Phase, Subject, Group, CueInfo, CuePres) %>%
+  summarise(orig_response = mean(orig_response, na.rm=T)) %>%
+  left_join(demo_covs, by = "Subject")
+
+input_model_data_block_recscale <- input_model_data_block_rev
+input_model_data_block_recscale$CuePres_s <- as.numeric(scale(input_model_data_block_recscale$CuePres))
+
+# rev lme model version 1
+rev_block_model_lmer_covar_1_all <- lmerTest::lmer(orig_response ~ Group * CueInfo * CuePres_s + 
+                                                   demo_age + demo_sex + demo_edu + demo_cort + demo_beta + demo_antidep 
+                                                   + AUDIT_score + (1 + CuePres_s | Subject),
+                                                   data = input_model_data_block_recscale)
+anova(rev_block_model_lmer_covar_1_all)
+
+# rev lme model version 2
+rev_block_model_lmer_covar_1_diffs <- lmerTest::lmer(orig_response ~ Group * CueInfo * CuePres_s + 
+                                                   demo_age + demo_sex + demo_edu + demo_antidep + AUDIT_score + 
+                                                   + (1 + CuePres_s | Subject),
+                                                   data = input_model_data_block_recscale)
+anova(rev_block_model_lmer_covar_1_diffs)
+
+# rev lme model version 3 (only diffs, w/o antidep because its confound)
+rev_block_model_lmer_covar_1_nonconfound <- lmerTest::lmer(orig_response ~ Group * CueInfo * CuePres_s + 
+                                                   demo_age + demo_sex + demo_edu + AUDIT_score + 
+                                                   (1 + CuePres_s | Subject),
+                                                   data = input_model_data_block_recscale)
+anova(rev_block_model_lmer_covar_1_nonconfound )
+
+
+# ---- Devaluation ---- #
+plot_data_stats_ptsd_ls <- sr_merge.recode_opt %>% 
+  filter(Study == study_include, Phase == 3, Block == 2, Group == "PTSD", 
+         CueInfo %in% c("no_change","deval"),!Subject %in% c("7015", "7021")) %>%
+  group_by(Subject, Group, CueInfo) %>%
+  summarise(avg_orig_response = mean(orig_response, na.rm = TRUE), .groups = "drop") %>%
+  left_join(self_report %>% select(Subject, PCL_score), by = "Subject") %>%
+  left_join(demo_covs, by = "Subject")
+
+# still significant with antidepressants
+deval_pcl_ls_ptsd <- lmerTest::lmer(avg_orig_response ~ PCL_score * CueInfo + demo_age + demo_sex + demo_edu +
+                                    + AUDIT_score + (1 | Subject),
+                                    data = plot_data_stats_ptsd_ls)
+anova(deval_pcl_ls_ptsd)
+test(emtrends(deval_pcl_ls_ptsd, var = "PCL_score", pairwise ~ CueInfo))
+
+
+# ---- brain ---- #
+betas_putam <- betas %>%
+  filter(roi == "putam") %>%
+  filter(run %in% c("learn_1","learn_2")) %>%
+  left_join(demo_covs, by = "Subject")
+
+model_betas_putam_lmer <- lmerTest::lmer(mean_beta ~  Group + run + pe + demo_age + demo_sex + demo_edu +
+                                    + AUDIT_score + (1 | Subject), data = betas_putam)
+#model_betas_putam_lme <- lme(mean_beta ~  Group * run * pe, random=~1|Subject, data = betas_putam)
+
+anova(model_betas_putam_lmer)
+```
+
+## RR AUD/SUD: create tables and write covars table (R2.1)
+```{r}
+# aud severity = aud3 = number of 3s = number endorsed
+# sud severity = sud3 = number of 3s = number endorsed
+grp <- factor(ifelse(startsWith(as.character(nest_scid_ss$Subject), "7"), "TC", "PTSD"),
+              levels = c("TC", "PTSD"))
+sev_labels <- c("mild (2-3)", "moderate (4-5)", "severe (6+)")
+
+# sud3: count of 3s across all substance columns
+drugs <- c("sedative", "cannabis", "stimulant", "opioid",
+           "inhalant", "pcp", "hallucinogenic", "unknown")
+sub_cols <- grep(paste0("^(", paste(drugs, collapse = "|"), ")_\\d+$"),
+                 names(nest_scid_ss), value = TRUE)
+nest_scid_ss$sud3 <- rowSums(nest_scid_ss[sub_cols] == 3, na.rm = TRUE)
+
+# Table 1: aud severity by group (labels)
+# bin and relabel as severity
+aud_sev <- cut(nest_scid_ss$aud3, breaks = c(1, 3, 5, Inf), labels = sev_labels)
+sud_sev <- cut(nest_scid_ss$sud3, breaks = c(1, 3, 5, Inf), labels = sev_labels)
+sev_table <- rbind(table(aud_sev, grp), table(sud_sev, grp))
+rownames(sev_table) <- paste(rep(c("AUD", "SUD"), each = 3), rownames(sev_table))
+
+# Table 2: drug endorsement (count of 3s in the first question of SCID; _1 columns == 3) by group
+  # any integer value means they endorsed it for question 1 (i.e. 1 2 or 3. if its blank, that means wasn't endorsed)
+use_cols <- paste0(drugs, "_1")
+drug_table <- cbind(TC   = colSums(nest_scid_ss[grp == "TC",   use_cols] >= 1 &
+                                   nest_scid_ss[grp == "TC",   use_cols] <= 3, na.rm = TRUE),
+                    PTSD = colSums(nest_scid_ss[grp == "PTSD", use_cols] >= 1 &
+                                   nest_scid_ss[grp == "PTSD", use_cols] <= 3, na.rm = TRUE))
+rownames(drug_table) <- drugs
+
+sev_table
+drug_table
+```
+
+
+## RR AUD/SUD: write covars table
+```{r}
+# Group sizes tand full severity distribution (including "none")
+aud_sev4 <- cut(nest_scid_ss$aud3, breaks = c(-Inf, 1, 3, 5, Inf),
+                labels = c("none", sev_labels))
+
+# SUD severity (4 levels), to match aud_sev4
+sud_sev4 <- cut(nest_scid_ss$sud3, breaks = c(-Inf, 1, 3, 5, Inf),
+                labels = c("none", sev_labels))
+
+# Ordinal coding: none=0, mild=1, moderate=2, severe=3
+nest_scid_ss$aud_ord <- as.numeric(aud_sev4) - 1
+nest_scid_ss$sud_ord <- as.numeric(sud_sev4) - 1
+
+
+# make covariate table for merging
+scid_covs <- nest_scid_ss[, c("Subject", "aud_ord", "sud_ord", "aud3", "sud3")]
+#write.csv(scid_covs, "NEST_scid_covariates.csv", row.names = FALSE)
+```
+
+## RR SCID and PCL distributions
+```{r}
+# ---- Histogram: PCL score by group ---- #
+plot_df_pcl <- behav_vars_summary_join %>%
+  select(Subject, Group, PCL_score) %>%
+  filter(!is.na(PCL_score))
+
+p_hist_pcl <- ggplot(plot_df_pcl, aes(x = PCL_score)) +
+  geom_histogram(data = plot_df_pcl %>% filter(Group == "PTSD"),
+                 binwidth = 5, fill = "#1A1A1A", alpha = 0.5, color = "black", size = 0.3) +
+  geom_histogram(data = plot_df_pcl %>% filter(Group == "TC"),
+                 binwidth = 5, fill = "#CCCCCC", alpha = 0.5, color = "black", size = 0.3) +
+  theme_classic(base_size = axes_tick_size) +
+  theme(axis.title = element_text(size = axes_labels_size),
+        axis.text  = element_text(size = axes_tick_size)) +
+  labs(x = "PCL Score", y = "Count")
+print(p_hist_pcl)
+ggsave("hist_pcl.pdf", p_hist_pcl, width = 7.5, height = 5, units = "cm")
+
+# ---- Histogram: SCID PTSD symptoms (B-E) by group ---- #
+plot_df_scid <- behav_vars_summary_join %>%
+  select(Subject, Group, total_bcde) %>%
+  filter(!is.na(total_bcde))
+
+p_hist_scid <- ggplot(plot_df_scid, aes(x = total_bcde)) +
+  geom_histogram(data = plot_df_scid %>% filter(Group == "PTSD"),
+                 binwidth = 1, fill = "#1A1A1A", alpha = 0.5, color = "black", size = 0.3) +
+  geom_histogram(data = plot_df_scid %>% filter(Group == "TC"),
+                 binwidth = 1, fill = "#CCCCCC", alpha = 0.5, color = "black", size = 0.3) +
+  theme_classic(base_size = axes_tick_size) +
+  theme(axis.title = element_text(size = axes_labels_size),
+        axis.text  = element_text(size = axes_tick_size)) +
+  labs(x = "SCID PTSD symptoms (B-E)", y = "Count")
+print(p_hist_scid)
+```
+
+## RR SCID PTSD: pcl x scid
+```{r}
+# ---- Within group ---- #
+pcl_vars  <- c("PCL_score", "pcl_clustB", "pcl_clustC", "pcl_clustD", "pcl_clustE")
+scid_vars <- c("total_bcde", "crit_B", "crit_C", "crit_D", "crit_E")
+pcl_scid_cors <- data.frame()
+
+for (grp_name in c("PTSD", "TC")) {
+  d <- behav_vars_summary_join %>% filter(Group == grp_name)
+  for (j in seq_along(pcl_vars)) {
+    ok <- !is.na(d[[pcl_vars[j]]]) & !is.na(d[[scid_vars[j]]])
+    ct <- cor.test(d[[pcl_vars[j]]][ok], d[[scid_vars[j]]][ok], method = "pearson")
+    pcl_scid_cors <- rbind(pcl_scid_cors, data.frame(
+      group = grp_name, pcl = pcl_vars[j], scid = scid_vars[j],
+      n = sum(ok), r = round(ct$estimate, 3), p = round(ct$p.value, 3)))
+  }
+}
+# correlations table (within group)
+pcl_scid_cors
+
+# ---- Groups together ---- #
+
+# Corr between PCL and symptoms endorsed
+d <- behav_vars_summary_join
+cor.test(d$PCL_score, d$total_bcde)
+
+# Plot corr between PCL and symptoms endorsed
+plot_df <- behav_vars_summary_join %>%
+  select(Subject, Group, PCL_score, total_bcde) %>%
+  filter(!is.na(PCL_score), !is.na(total_bcde)) %>%
+  mutate(Group = factor(Group, levels = c("TC", "PTSD")))
+
+ct <- cor.test(plot_df$PCL_score, plot_df$total_bcde, method = "pearson")
+stat_label <- paste0("r = ", round(ct$estimate, 2), ", p ",
+                     ifelse(ct$p.value < .001, "< .001", paste0("= ", round(ct$p.value, 3))))
+
+p_pcl_scid <- ggplot(plot_df, aes(x = PCL_score, y = total_bcde)) +
+  geom_smooth(method = "lm", se = TRUE, alpha = 0.15, size = 0.5, color = "black", fill = "black") +
+  geom_jitter(aes(color = Group, shape = Group), width = 0, height = 0.1, size = 1.2, alpha = 0.8) +
+  annotate("text", x = Inf, y = -Inf, label = stat_label,
+           hjust = 1.05, vjust = -0.5, size = 2.2, color = "black") +
+  scale_color_manual(values = c(TC = tc_col_light, PTSD = ptsd_col)) +
+  scale_shape_manual(values = c(TC = 1, PTSD = 16)) +
+  theme_classic(base_size = axes_tick_size) +
+  theme(axis.title = element_text(size = axes_labels_size),
+        axis.text  = element_text(size = axes_tick_size),
+        legend.position = "none") +
+  labs(x = "PCL Score", y = "SCID PTSD symptoms (B-E)")
+print(p_pcl_scid)
+
+# Corr PCL clust and endorsed symptom clust
+pcl_scid_cors_all <- data.frame()
+d <- behav_vars_summary_join
+for (j in seq_along(pcl_vars)) {
+  ok <- !is.na(d[[pcl_vars[j]]]) & !is.na(d[[scid_vars[j]]])
+  ct <- cor.test(d[[pcl_vars[j]]][ok], d[[scid_vars[j]]][ok], method = "pearson")
+  pcl_scid_cors_all <- rbind(pcl_scid_cors_all, data.frame(
+    group = "All", pcl = pcl_vars[j], scid = scid_vars[j],
+    n = sum(ok), r = round(ct$estimate, 3), p = round(ct$p.value, 3)))
+}
+pcl_scid_cors_all
+
+# Plot corr between PCL clusts and symptoms endorsed clusts
+pcl_labels  <- c("PCL Score", "PCL Intrusion (B)", "PCL Avoidance (C)",
+                 "PCL Neg. Cognition/Mood (D)", "PCL Arousal (E)")
+scid_labels <- c("SCID PTSD symptoms (B-E)", "SCID Criterion B", "SCID Criterion C",
+                 "SCID Criterion D", "SCID Criterion E")
+pcl_scid_plots <- list()
+for (j in seq_along(pcl_vars)) {
+  x_var <- pcl_vars[j]
+  y_var <- scid_vars[j]
+
+  plot_df <- behav_vars_summary_join %>%
+    select(Subject, Group, all_of(c(x_var, y_var))) %>%
+    filter(!is.na(.data[[x_var]]), !is.na(.data[[y_var]])) %>%
+    mutate(Group = factor(Group, levels = c("TC", "PTSD")))
+
+  ct <- cor.test(plot_df[[x_var]], plot_df[[y_var]], method = "pearson")
+  stat_label <- paste0("r = ", round(ct$estimate, 2), ", p ",
+                       ifelse(ct$p.value < .001, "< .001", paste0("= ", round(ct$p.value, 3))))
+
+  pcl_scid_plots[[x_var]] <- ggplot(plot_df, aes(x = .data[[x_var]], y = .data[[y_var]])) +
+    geom_smooth(method = "lm", se = TRUE, alpha = 0.15, size = 0.5, color = "black", fill = "black") +
+    geom_jitter(aes(color = Group, shape = Group), width = 0, height = 0.1, size = 1.2, alpha = 0.8) +
+    annotate("text", x = Inf, y = -Inf, label = stat_label,
+             hjust = 1.05, vjust = -0.5, size = 2.2, color = "black") +
+    scale_color_manual(values = c(TC = tc_col_light, PTSD = ptsd_col)) +
+    scale_shape_manual(values = c(TC = 1, PTSD = 16)) +
+    theme_classic(base_size = axes_tick_size) +
+    theme(axis.title = element_text(size = axes_labels_size),
+          axis.text  = element_text(size = axes_tick_size),
+          legend.position = "none") +
+    labs(x = pcl_labels[j], y = scid_labels[j])
+
+  print(pcl_scid_plots[[x_var]])
+}
+```
+
+## RR SCID_PTSDxLearn (R1.3)
+```{r}
+# Get scid statistics
+behav_vars_summary_join %>%
+  group_by(Group) %>%
+  summarise(n       = sum(!is.na(total_bcde)),
+            mean    = mean(total_bcde, na.rm = TRUE),
+            sd      = sd(total_bcde, na.rm = TRUE),
+            min     = min(total_bcde, na.rm = TRUE),
+            max     = max(total_bcde, na.rm = TRUE))
+
+# ---- SCID total (B-E) x Opt Resp (Learn) ---- #
+plot_df_total <- behav_vars_summary_join %>%
+  select(Subject, Group, total_bcde, opt_resp_learn) %>%
+  filter(!is.na(total_bcde), !is.na(opt_resp_learn)) %>%
+  mutate(Group = factor(Group, levels = c("TC", "PTSD")))
+
+ct_ptsd <- cor.test(plot_df_total$total_bcde[plot_df_total$Group == "PTSD"],
+                    plot_df_total$opt_resp_learn[plot_df_total$Group == "PTSD"])
+ct_tc   <- cor.test(plot_df_total$total_bcde[plot_df_total$Group == "TC"],
+                    plot_df_total$opt_resp_learn[plot_df_total$Group == "TC"])
+lab_ptsd <- paste0("PTSD: r = ", round(ct_ptsd$estimate, 2), ", p = ", round(ct_ptsd$p.value, 3))
+lab_tc   <- paste0("TC: r = ",   round(ct_tc$estimate, 2),   ", p = ", round(ct_tc$p.value, 3))
+
+p_scid_total_opt <- ggplot(plot_df_total, aes(x = total_bcde, y = opt_resp_learn,
+                                              color = Group, shape = Group, fill = Group)) +
+  geom_jitter(width = 0.1, height = 0, size = 1.2, alpha = 0.8) +
+  geom_smooth(method = "lm", se = TRUE, alpha = 0.15, size = 0.5, aes(group = Group)) +
+  annotate("text", x = Inf, y = Inf,  label = lab_ptsd, hjust = 1.05, vjust = 1.5,  size = 2.2, color = ptsd_col) +
+  annotate("text", x = Inf, y = -Inf, label = lab_tc,   hjust = 1.05, vjust = -0.5, size = 2.2, color = tc_col_light) +
+  scale_color_manual(values = c(TC = tc_col_light, PTSD = ptsd_col)) +
+  scale_fill_manual(values  = c(TC = tc_col_light, PTSD = ptsd_col)) +
+  scale_shape_manual(values = c(TC = 1, PTSD = 16)) +
+  theme_classic(base_size = axes_tick_size) +
+  theme(axis.title = element_text(size = axes_labels_size),
+        axis.text  = element_text(size = axes_tick_size),
+        legend.position = "none") +
+  labs(x = "SCID PTSD symptoms (B-E)", y = "Opt Resp (Learn)")
+print(p_scid_total_opt)
+#ggsave("scid_total_opt.pdf", p_scid_total_opt, width = 7.5, height = 5, units = "cm")
+
+# ---- SCID Criterion B x Opt Resp (Learn) ---- #
+plot_df_B <- behav_vars_summary_join %>%
+  select(Subject, Group, crit_B, opt_resp_learn) %>%
+  filter(!is.na(crit_B), !is.na(opt_resp_learn)) %>%
+  mutate(Group = factor(Group, levels = c("TC", "PTSD")))
+
+ct_ptsd <- cor.test(plot_df_B$crit_B[plot_df_B$Group == "PTSD"],
+                    plot_df_B$opt_resp_learn[plot_df_B$Group == "PTSD"])
+ct_tc   <- cor.test(plot_df_B$crit_B[plot_df_B$Group == "TC"],
+                    plot_df_B$opt_resp_learn[plot_df_B$Group == "TC"])
+lab_ptsd <- paste0("PTSD: r = ", round(ct_ptsd$estimate, 2), ", p = ", round(ct_ptsd$p.value, 3))
+lab_tc   <- paste0("TC: r = ",   round(ct_tc$estimate, 2),   ", p = ", round(ct_tc$p.value, 3))
+
+p_scid_B_opt <- ggplot(plot_df_B, aes(x = crit_B, y = opt_resp_learn,
+                                      color = Group, shape = Group, fill = Group)) +
+  geom_jitter(width = 0.1, height = 0, size = 1.2, alpha = 0.8) +
+  geom_smooth(method = "lm", se = TRUE, alpha = 0.15, size = 0.5, aes(group = Group)) +
+  annotate("text", x = Inf, y = Inf,  label = lab_ptsd, hjust = 1.05, vjust = 1.5,  size = 2.2, color = ptsd_col) +
+  annotate("text", x = Inf, y = -Inf, label = lab_tc,   hjust = 1.05, vjust = -0.5, size = 2.2, color = tc_col_light) +
+  scale_color_manual(values = c(TC = tc_col_light, PTSD = ptsd_col)) +
+  scale_fill_manual(values  = c(TC = tc_col_light, PTSD = ptsd_col)) +
+  scale_shape_manual(values = c(TC = 1, PTSD = 16)) +
+  theme_classic(base_size = axes_tick_size) +
+  theme(axis.title = element_text(size = axes_labels_size),
+        axis.text  = element_text(size = axes_tick_size),
+        legend.position = "none") +
+  labs(x = "SCID Criterion B", y = "Opt Resp (Learn)")
+print(p_scid_B_opt)
+#ggsave("scid_B_opt.pdf", p_scid_B_opt, width = 7.5, height = 5, units = "cm")
+
+# ---- SCID Criterion C x Opt Resp (Learn) ---- #
+plot_df_C <- behav_vars_summary_join %>%
+  select(Subject, Group, crit_C, opt_resp_learn) %>%
+  filter(!is.na(crit_C), !is.na(opt_resp_learn)) %>%
+  mutate(Group = factor(Group, levels = c("TC", "PTSD")))
+
+ct_ptsd <- cor.test(plot_df_C$crit_C[plot_df_C$Group == "PTSD"],
+                    plot_df_C$opt_resp_learn[plot_df_C$Group == "PTSD"])
+ct_tc   <- cor.test(plot_df_C$crit_C[plot_df_C$Group == "TC"],
+                    plot_df_C$opt_resp_learn[plot_df_C$Group == "TC"])
+lab_ptsd <- paste0("PTSD: r = ", round(ct_ptsd$estimate, 2), ", p = ", round(ct_ptsd$p.value, 3))
+lab_tc   <- paste0("TC: r = ",   round(ct_tc$estimate, 2),   ", p = ", round(ct_tc$p.value, 3))
+
+p_scid_C_opt <- ggplot(plot_df_C, aes(x = crit_C, y = opt_resp_learn,
+                                      color = Group, shape = Group, fill = Group)) +
+  geom_jitter(width = 0.1, height = 0, size = 1.2, alpha = 0.8) +
+  geom_smooth(method = "lm", se = TRUE, alpha = 0.15, size = 0.5, aes(group = Group)) +
+  annotate("text", x = Inf, y = Inf,  label = lab_ptsd, hjust = 1.05, vjust = 1.5,  size = 2.2, color = ptsd_col) +
+  annotate("text", x = Inf, y = -Inf, label = lab_tc,   hjust = 1.05, vjust = -0.5, size = 2.2, color = tc_col_light) +
+  scale_color_manual(values = c(TC = tc_col_light, PTSD = ptsd_col)) +
+  scale_fill_manual(values  = c(TC = tc_col_light, PTSD = ptsd_col)) +
+  scale_shape_manual(values = c(TC = 1, PTSD = 16)) +
+  theme_classic(base_size = axes_tick_size) +
+  theme(axis.title = element_text(size = axes_labels_size),
+        axis.text  = element_text(size = axes_tick_size),
+        legend.position = "none") +
+  labs(x = "SCID Criterion C", y = "Opt Resp (Learn)")
+print(p_scid_C_opt)
+#ggsave("scid_C_opt.pdf", p_scid_C_opt, width = 7.5, height = 5, units = "cm")
+
+# ---- SCID Criterion D x Opt Resp (Learn) ---- #
+plot_df_D <- behav_vars_summary_join %>%
+  select(Subject, Group, crit_D, opt_resp_learn) %>%
+  filter(!is.na(crit_D), !is.na(opt_resp_learn)) %>%
+  mutate(Group = factor(Group, levels = c("TC", "PTSD")))
+
+ct_ptsd <- cor.test(plot_df_D$crit_D[plot_df_D$Group == "PTSD"],
+                    plot_df_D$opt_resp_learn[plot_df_D$Group == "PTSD"])
+ct_tc   <- cor.test(plot_df_D$crit_D[plot_df_D$Group == "TC"],
+                    plot_df_D$opt_resp_learn[plot_df_D$Group == "TC"])
+lab_ptsd <- paste0("PTSD: r = ", round(ct_ptsd$estimate, 2), ", p = ", round(ct_ptsd$p.value, 3))
+lab_tc   <- paste0("TC: r = ",   round(ct_tc$estimate, 2),   ", p = ", round(ct_tc$p.value, 3))
+
+p_scid_D_opt <- ggplot(plot_df_D, aes(x = crit_D, y = opt_resp_learn,
+                                      color = Group, shape = Group, fill = Group)) +
+  geom_jitter(width = 0.1, height = 0, size = 1.2, alpha = 0.8) +
+  geom_smooth(method = "lm", se = TRUE, alpha = 0.15, size = 0.5, aes(group = Group)) +
+  annotate("text", x = Inf, y = Inf,  label = lab_ptsd, hjust = 1.05, vjust = 1.5,  size = 2.2, color = ptsd_col) +
+  annotate("text", x = Inf, y = -Inf, label = lab_tc,   hjust = 1.05, vjust = -0.5, size = 2.2, color = tc_col_light) +
+  scale_color_manual(values = c(TC = tc_col_light, PTSD = ptsd_col)) +
+  scale_fill_manual(values  = c(TC = tc_col_light, PTSD = ptsd_col)) +
+  scale_shape_manual(values = c(TC = 1, PTSD = 16)) +
+  theme_classic(base_size = axes_tick_size) +
+  theme(axis.title = element_text(size = axes_labels_size),
+        axis.text  = element_text(size = axes_tick_size),
+        legend.position = "none") +
+  labs(x = "SCID Criterion D", y = "Opt Resp (Learn)")
+print(p_scid_D_opt)
+#ggsave("scid_D_opt.pdf", p_scid_D_opt, width = 7.5, height = 5, units = "cm")
+
+# ---- SCID Criterion E x Opt Resp (Learn) ---- #
+plot_df_E <- behav_vars_summary_join %>%
+  select(Subject, Group, crit_E, opt_resp_learn) %>%
+  filter(!is.na(crit_E), !is.na(opt_resp_learn)) %>%
+  mutate(Group = factor(Group, levels = c("TC", "PTSD")))
+
+ct_ptsd <- cor.test(plot_df_E$crit_E[plot_df_E$Group == "PTSD"],
+                    plot_df_E$opt_resp_learn[plot_df_E$Group == "PTSD"])
+ct_tc   <- cor.test(plot_df_E$crit_E[plot_df_E$Group == "TC"],
+                    plot_df_E$opt_resp_learn[plot_df_E$Group == "TC"])
+lab_ptsd <- paste0("PTSD: r = ", round(ct_ptsd$estimate, 2), ", p = ", round(ct_ptsd$p.value, 3))
+lab_tc   <- paste0("TC: r = ",   round(ct_tc$estimate, 2),   ", p = ", round(ct_tc$p.value, 3))
+
+p_scid_E_opt <- ggplot(plot_df_E, aes(x = crit_E, y = opt_resp_learn,
+                                      color = Group, shape = Group, fill = Group)) +
+  geom_jitter(width = 0.1, height = 0, size = 1.2, alpha = 0.8) +
+  geom_smooth(method = "lm", se = TRUE, alpha = 0.15, size = 0.5, aes(group = Group)) +
+  annotate("text", x = Inf, y = Inf,  label = lab_ptsd, hjust = 1.05, vjust = 1.5,  size = 2.2, color = ptsd_col) +
+  annotate("text", x = Inf, y = -Inf, label = lab_tc,   hjust = 1.05, vjust = -0.5, size = 2.2, color = tc_col_light) +
+  scale_color_manual(values = c(TC = tc_col_light, PTSD = ptsd_col)) +
+  scale_fill_manual(values  = c(TC = tc_col_light, PTSD = ptsd_col)) +
+  scale_shape_manual(values = c(TC = 1, PTSD = 16)) +
+  theme_classic(base_size = axes_tick_size) +
+  theme(axis.title = element_text(size = axes_labels_size),
+        axis.text  = element_text(size = axes_tick_size),
+        legend.position = "none") +
+  labs(x = "SCID Criterion E", y = "Opt Resp (Learn)")
+print(p_scid_E_opt)
+#ggsave("scid_E_opt.pdf", p_scid_E_opt, width = 7.5, height = 5, units = "cm")
+
+```
+
+
+## RR SCID_PTSDxDeval (R1.3)
+```{r}
+# 2) w/ Devaluation behavior (Fig. 2d)
+# ---- Set plotting data --- #
+plot_data <- sr_merge.recode_opt %>% 
+  filter(Study == study_include, Phase == 3, Block == 2,
+         CueInfo %in% c("no_change","deval"),!Subject %in% c("7015", "7021")) %>%
+  group_by(Subject, Group, CueInfo) %>%
+  summarise(avg_orig_response = mean(orig_response, na.rm = TRUE), .groups = "drop") %>%
+  left_join(nest_scid_ptsd_summary %>% select(Subject, total_bcde), by = "Subject")
+
+# ---- Plot: PTSD only ---- #
+p_deval_scid_only_PTSD <- plot_data %>%
+  filter(Group != "TC" & CueInfo %in% c("deval", "no_change"), !is.na(total_bcde)) %>%
+  ggplot(aes(x = total_bcde, y = avg_orig_response, color = CueInfo, fill = CueInfo)) +
+  geom_jitter(width = 0.1, height = 0, alpha = 0.6, size = 1) +
+  geom_smooth(method = "lm", se = TRUE, alpha = 0.2, size = 0.5) +
+  scale_color_manual(values = c(deval = deval_col, no_change = no_change_col),
+                     labels = c(deval = "Devalued", no_change = "No Change")) +
+  scale_fill_manual(values = c(deval = deval_col, no_change = no_change_col),
+                    labels = c(deval = "Devalued", no_change = "No Change")) +
+  scale_y_continuous(labels = scales::percent) +
+  theme_classic(base_size = axes_tick_size) +
+  theme(axis.title = element_text(size = axes_labels_size), 
+        axis.text = element_text(size = axes_tick_size)) +
+  labs(x = "SCID PTSD symptoms (B-E)", y = "Maintained response from Learning",
+       color = "Stimulus type", fill = "Stimulus type")
+print(p_deval_scid_only_PTSD) #ggsave("fig2D_DevalxSCID.pdf", p_deval_scid_only_PTSD, width = 8, height = 5, units = "cm")
+
+# ---- Plot: TC only ---- #
+p_deval_scid_only_TC <- plot_data %>%
+  filter(Group == "TC" & CueInfo %in% c("deval", "no_change"), !is.na(total_bcde)) %>%
+  ggplot(aes(x = total_bcde, y = avg_orig_response, color = CueInfo, fill = CueInfo)) +
+  geom_jitter(width = 0.1, height = 0, alpha = 0.6, size = 1) +
+  geom_smooth(method = "lm", se = TRUE, alpha = 0.2, size = 0.5) +
+  scale_color_manual(values = c(deval = deval_col, no_change = no_change_col),
+                     labels = c(deval = "Devalued", no_change = "No Change")) +
+  scale_fill_manual(values = c(deval = deval_col, no_change = no_change_col),
+                    labels = c(deval = "Devalued", no_change = "No Change")) +
+  scale_y_continuous(labels = scales::percent) +
+  theme_classic(base_size = axes_tick_size) +
+  theme(axis.title = element_text(size = axes_labels_size), 
+        axis.text = element_text(size = axes_tick_size)) +
+  labs(x = "SCID PTSD symptoms (B-E)", y = "Maintained response from Learning",
+       color = "Stimulus type", fill = "Stimulus type")
+print(p_deval_scid_only_TC) #ggsave("fig2D_DevalxSCID_TC.pdf", p_deval_scid_only_TC, width = 8, height = 5, units = "cm")
+
+# ----- Stats ----- #
+# PTSD
+plot_data_stats_ptsd <- sr_merge.recode_opt %>% 
+  filter(Study == study_include, Phase == 3, Block == 2, Group == "PTSD", 
+         CueInfo %in% c("no_change","deval"),!Subject %in% c("7015", "7021")) %>%
+  group_by(Subject, Group, CueInfo) %>%
+  summarise(avg_orig_response = mean(orig_response, na.rm = TRUE), .groups = "drop") %>%
+  left_join(nest_scid_ptsd_summary %>% select(Subject, total_bcde), by = "Subject")
+
+deval_scid_ptsd <- lmerTest::lmer(avg_orig_response ~ total_bcde * CueInfo + (1 | Subject), data = plot_data_stats_ptsd)
+anova(deval_scid_ptsd)
+test(emtrends(deval_scid_ptsd, var = "total_bcde", pairwise ~ CueInfo))
+
+# TC
+plot_data_stats_tc <- sr_merge.recode_opt %>% 
+  filter(Study == study_include, Phase == 3, Block == 2, Group == "TC", 
+         CueInfo %in% c("no_change","deval"),!Subject %in% c("7015", "7021")) %>%
+  group_by(Subject, Group, CueInfo) %>%
+  summarise(avg_orig_response = mean(orig_response, na.rm = TRUE), .groups = "drop") %>%
+  left_join(nest_scid_ptsd_summary %>% select(Subject, total_bcde), by = "Subject")
+
+deval_scid_tc <- lmerTest::lmer(avg_orig_response ~ total_bcde * CueInfo + (1 | Subject), data = plot_data_stats_tc)
+anova(deval_scid_tc)
+```
+
+## RR SCID_PTSDxA_win (R1.3)
+```{r}
+# 3) w/ Model parameter: α win
+# ---- Plot: PTSD only ---- #
+plot_df_awin_ptsd <- behav_vars_summary_join %>%
+  filter(Group == "PTSD") %>%
+  select(Subject, total_bcde, A_win) %>%
+  filter(!is.na(total_bcde), !is.na(A_win))
+
+ct_awin_ptsd <- cor.test(plot_df_awin_ptsd$total_bcde, plot_df_awin_ptsd$A_win, method = "pearson")
+lab_awin_ptsd <- paste0("r = ", round(ct_awin_ptsd$estimate, 2), ", p = ", round(ct_awin_ptsd$p.value, 3))
+
+p_awin_scid_only_PTSD <- ggplot(plot_df_awin_ptsd, aes(x = total_bcde, y = A_win)) +
+  geom_jitter(width = 0.1, height = 0, size = 1.2, alpha = 0.8, shape = 16, color = ptsd_col) +
+  geom_smooth(method = "lm", se = TRUE, alpha = 0.15, size = 0.5, color = ptsd_col, fill = ptsd_col) +
+  annotate("text", x = Inf, y = Inf, label = lab_awin_ptsd,
+           hjust = 1.05, vjust = 1.5, size = 2.2, color = ptsd_col) +
+  theme_classic(base_size = axes_tick_size) +
+  theme(axis.title = element_text(size = axes_labels_size),
+        axis.text  = element_text(size = axes_tick_size)) +
+  labs(x = "SCID PTSD symptoms (B-E)", y = "α win")
+print(p_awin_scid_only_PTSD) #ggsave("AwinxSCID_PTSD.pdf", p_awin_scid_only_PTSD, width = 7.5, height = 5, units = "cm")
+
+# ---- Plot: TC only ---- #
+plot_df_awin_tc <- behav_vars_summary_join %>%
+  filter(Group == "TC") %>%
+  select(Subject, total_bcde, A_win) %>%
+  filter(!is.na(total_bcde), !is.na(A_win))
+
+ct_awin_tc <- cor.test(plot_df_awin_tc$total_bcde, plot_df_awin_tc$A_win, method = "pearson")
+lab_awin_tc <- paste0("r = ", round(ct_awin_tc$estimate, 2), ", p = ", round(ct_awin_tc$p.value, 3))
+
+p_awin_scid_only_TC <- ggplot(plot_df_awin_tc, aes(x = total_bcde, y = A_win)) +
+  geom_jitter(width = 0.1, height = 0, size = 1.2, alpha = 0.8, shape = 1, color = tc_col_light) +
+  geom_smooth(method = "lm", se = TRUE, alpha = 0.15, size = 0.5, color = tc_col_light, fill = tc_col_light) +
+  annotate("text", x = Inf, y = Inf, label = lab_awin_tc,
+           hjust = 1.05, vjust = 1.5, size = 2.2, color = tc_col_light) +
+  theme_classic(base_size = axes_tick_size) +
+  theme(axis.title = element_text(size = axes_labels_size),
+        axis.text  = element_text(size = axes_tick_size)) +
+  labs(x = "SCID PTSD symptoms (B-E)", y = "α win")
+print(p_awin_scid_only_TC) #ggsave("AwinxSCID_TC.pdf", p_awin_scid_only_TC, width = 7.5, height = 5, units = "cm")
+```
+
+# RR correct/incorrect GLM
+```{r}
+# load
+betas_corrincorr <- read.csv(file.path(processed_betas_dir, "mean_betas_long_corrincorr.csv"))
+
+betas_corrincorr_processed <- betas_corrincorr %>%
+  mutate(group = ifelse(as.numeric(as.character(subject)) < 8000, "TC", "PTSD"))
+
+# stats
+betas_putam_ci <- betas_corrincorr_processed %>%
+  filter(roi == "putam") %>%
+  filter(run %in% c("learn_1","learn_2"))
+
+model_betas_putam_lmer_ci <- lmerTest::lmer(mean_beta ~  group + run + pe + (1 | subject), data = betas_putam_ci)
+#model_betas_putam_lme <- lme(mean_beta ~  Group * run * pe, random=~1|Subject, data = betas_putam)
+
+anova(model_betas_putam_lmer_ci)
+emmeans(model_betas_putam_lmer_ci, pairwise ~ group)
+emmeans(model_betas_putam_lmer_ci, pairwise ~ pe)
+
+# fig 3a with ci
+betas_opt_nonopt_paired_ci <- betas_corrincorr_processed %>%
+  filter(roi == "putam") %>%
+  filter(run %in% c("learn_1","learn_2")) %>%
+  group_by(group, subject, pe) %>%
+  summarise(mean_beta = mean(mean_beta, na.rm = TRUE), .groups = "drop") %>%
+  mutate(pe_label = factor(case_when(pe == 1 ~ "Correct",
+                                     pe == 2 ~ "Incorrect"),
+                           levels = c("Incorrect", "Correct")),
+         group = factor(group, levels = c("TC", "PTSD")))
+
+p_opt_nonopt_paired_ci <- ggplot(betas_opt_nonopt_paired_ci, 
+                              aes(x = pe_label, y = mean_beta)) +
+  geom_line(aes(group = subject), color = "grey50", alpha = 0.4, size = 0.3) +
+  stat_summary(fun = mean, geom = "bar",
+               width = 0.8, color = "grey30", alpha = 0.3, size = 0.2) +
+  stat_summary(fun.data = mean_se, geom = "errorbar",
+               color = "black", width = 0, size = 1) +
+  facet_grid(. ~ group) +
+  theme_classic(base_size = axes_tick_size) +
+  theme(axis.title = element_text(size = axes_labels_size),
+        axis.text  = element_text(size = axes_tick_size),
+        strip.background = element_rect(fill = "white", color = "black")) +
+  labs(x = "Response type", y = "Putamen response")
+print(p_opt_nonopt_paired_ci)
+
+# fig 3b with ci
+betas_run_paired_ci <- betas_corrincorr_processed %>%
+  filter(roi == "putam") %>%
+  #filter(pe == 1) %>%
+  filter(run %in% c("learn_1","learn_2")) %>%
+  group_by(group, subject, run) %>%
+  summarise(mean_beta = mean(mean_beta, na.rm = TRUE), .groups = "drop") %>%
+  mutate(group = factor(group, levels = c("TC", "PTSD")),
+         run = factor(run, levels = c("learn_1", "learn_2")))
+
+p_run_paired_ci <- ggplot(betas_run_paired_ci,
+                       aes(x = run, y = mean_beta)) +
+  geom_line(aes(group = subject), color = "grey50", alpha = 0.3, size = 0.3) +
+  stat_summary(fun = mean, geom = "bar",
+               width = 0.8, color = "grey30", alpha = 0.3, size = 0.2) +
+  stat_summary(fun.data = mean_se, geom = "errorbar",
+               color = "black", width = 0, size = 1) +
+  facet_grid(. ~ group) +
+  theme_classic(base_size = axes_tick_size) +
+  theme(axis.title = element_text(size = axes_labels_size),
+        axis.text  = element_text(size = axes_tick_size),
+        strip.background = element_rect(fill = "white", color = "black")) +
+  labs(x = "Run", y = "Putamen (optimal)")
+print(p_run_paired_ci)
+```
+
+# RR maybe include?
+```{r}
+pre_hist <- pre_hist %>%
+  mutate(n_exec_z = as.numeric(scale(n_exec)),
+         p_rew_z  = as.numeric(scale(p_rew)))
+
+post_rev <- sr_merge.recode_opt %>%
+  filter(Phase == 2, CueInfo == "rev") %>%
+  mutate(chose_old = 1 - Opt_resp) %>%
+  left_join(pre_hist %>% select(Subject, Cue, n_exec_z, p_rew_z),
+            by = c("Subject", "Cue")) %>%
+  mutate(post_trial_c = as.numeric(scale(CuePres, scale = FALSE)),
+         Group        = factor(Group, levels = c("TC", "PTSD")))
+
+#post_rev <- post_rev %>%
+#  mutate(
+#    n_exec_c     = n_exec - mean(pre_hist$n_exec),
+#    p_rew_c      = p_rew  - mean(pre_hist$p_rew),
+#    post_trial_c = CuePres - mean(CuePres),
+#    Group        = factor(Group, levels = c("TC", "PTSD"))
+#  )
+
+post_rev_blk <- post_rev %>%
+  group_by(Subject, Group, Cue, Block, n_exec_z, p_rew_z) %>%
+  summarise(prop_old = mean(chose_old), .groups = "drop") %>%
+  mutate(Block_c = as.numeric(scale(Block, scale = FALSE)))
+
+m_sr_lmer <- lmerTest::lmer(prop_old ~ Group * Block_c * n_exec_z +
+                              (1 + Block_c | Subject),
+                            data = post_rev_blk)
+anova(m_sr_lmer)
+
+emtrends(m_sr_lmer, ~ Group, var = "n_exec_z")
+emtrends(m_sr_lmer, ~ Group, var = "p_rew_z")
+```
+
+```{r}
+m_sr <- glmer(chose_old ~ Group * post_trial_c * (n_exec_c + p_rew_c) +
+                (1 + post_trial_c | Subject),
+              family = binomial, data = post_rev,
+              control = glmerControl(optimizer = "bobyqa",
+                                     optCtrl = list(maxfun = 2e5)))
+summary(m_sr)
+
+emtrends(m_sr, ~ Group, var = "n_exec_c")
+emtrends(m_sr, ~ Group, var = "p_rew_c")
+```
+
+## archive: RR AUD and SUD: Learn (R1.3)
+```{r}
+# 1) w/ Learning behavior (Fig. 2b)
+covar_vars   <- c("aud3", "sud3", "aud_ord", "sud_ord")
+covar_labels <- c("AUD symptoms endorsed", "SUD symptoms endorsed",
+                  "AUD status (0-3)", "SUD status (0-3)")
+covar_plots  <- list()
+
+for (i in seq_along(covar_vars)) {
+  v <- covar_vars[i]
+
+  plot_df <- behav_vars_summary_join %>%
+    filter(Group == "PTSD") %>%
+    select(Subject, all_of(v), opt_resp_learn) %>%
+    filter(!is.na(.data[[v]]), !is.na(opt_resp_learn))
+
+  ct <- cor.test(plot_df[[v]], plot_df$opt_resp_learn, method = "spearman", exact = FALSE)
+  stat_label <- paste0("rho = ", round(ct$estimate, 2), ", p = ", round(ct$p.value, 3))
+
+  covar_plots[[v]] <- ggplot(plot_df, aes(x = .data[[v]], y = opt_resp_learn)) +
+    geom_jitter(width = 0.1, height = 0, size = 1.2, alpha = 0.7, color = "black") +
+    geom_smooth(method = "lm", se = TRUE, alpha = 0.15, size = 0.5, color = "black", fill = "black") +
+    annotate("text", x = Inf, y = Inf, label = stat_label,
+             hjust = 1.05, vjust = 1.5, size = 2.2, color = "black") +
+    theme_classic(base_size = axes_tick_size) +
+    theme(axis.title = element_text(size = axes_labels_size),
+          axis.text  = element_text(size = axes_tick_size)) +
+    labs(x = covar_labels[i], y = "Opt Resp (Learn)")
+
+  print(covar_plots[[v]])
+}
+```
+
+## archive: RR AUD and SUD:  (R1.3)
+```{r}
+# 3) w/ a+ (fig. 4c)
+
+covar_vars   <- c("aud3", "sud3", "aud_ord", "sud_ord")
+covar_labels <- c("AUD symptoms endorsed", "SUD symptoms endorsed",
+                  "AUD status (0-3)", "SUD status (0-3)")
+beta_vars    <- c("A_win")
+beta_labels  <- c("α win")
+
+tc_grey   <- "grey65"
+ptsd_grey <- "grey25"
+
+covar_beta_plots <- list()
+
+for (b in seq_along(beta_vars)) {
+  for (i in seq_along(covar_vars)) {
+    x_var <- covar_vars[i]
+    y_var <- beta_vars[b]
+
+    plot_df <- behav_vars_summary_join %>%
+      select(Subject, Group, all_of(c(x_var, y_var))) %>%
+      filter(!is.na(.data[[x_var]]), !is.na(.data[[y_var]])) %>%
+      mutate(Group = factor(Group, levels = c("TC", "PTSD")))
+
+    # Spearman per group (or print 'no variability')
+    stats_df <- data.frame()
+    for (grp_name in c("PTSD", "TC")) {
+      d <- plot_df %>% filter(Group == grp_name)
+      if (length(unique(d[[x_var]])) < 2) {
+        lab <- paste0(grp_name, ": no variability")
+      } else {
+        ct  <- cor.test(d[[x_var]], d[[y_var]], method = "spearman", exact = FALSE)
+        lab <- paste0(grp_name, ": rho = ", round(ct$estimate, 2), ", p = ", round(ct$p.value, 3))
+      }
+      stats_df <- rbind(stats_df, data.frame(Group = grp_name, label = lab))
+    }
+    stats_df$y     <- ifelse(stats_df$Group == "PTSD", Inf, -Inf)
+    stats_df$vjust <- ifelse(stats_df$Group == "PTSD", 1.5, -0.5)
+    stats_df$col   <- ifelse(stats_df$Group == "PTSD", ptsd_grey, tc_grey)
+
+    p <- ggplot(plot_df, aes(x = .data[[x_var]], y = .data[[y_var]],
+                             color = Group, shape = Group, fill = Group)) +
+      geom_jitter(width = 0.1, height = 0, size = 1.2, alpha = 0.8) +
+      geom_smooth(method = "lm", se = TRUE, alpha = 0.15, size = 0.5, aes(group = Group)) +
+      geom_text(data = stats_df, aes(x = Inf, y = y, label = label, vjust = vjust),
+                hjust = 1.05, size = 2.2, color = stats_df$col, inherit.aes = FALSE) +
+      scale_color_manual(values = c(TC = tc_grey, PTSD = ptsd_grey)) +
+      scale_fill_manual(values  = c(TC = tc_grey, PTSD = ptsd_grey)) +
+      scale_shape_manual(values = c(TC = 1, PTSD = 16)) +
+      theme_classic(base_size = axes_tick_size) +
+      theme(axis.title = element_text(size = axes_labels_size),
+            axis.text  = element_text(size = axes_tick_size),
+            legend.position = "none") +
+      labs(x = covar_labels[i], y = beta_labels[b])
+
+    covar_beta_plots[[paste(x_var, y_var, sep = "_")]] <- p
+    print(p)
+  }
+}
+
+
+```
+
+
 
 # --------------------------------------- Neuroimaging + behavior ----------------------------------------------#
 
